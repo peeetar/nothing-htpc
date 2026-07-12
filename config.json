@@ -1,0 +1,45 @@
+{
+  "weather": {
+    "lat": 41.117,
+    "lon": 20.802,
+    "_note": "Set to your coordinates. Weather comes from open-meteo.com, no API key."
+  },
+  "apps": [
+    {
+      "id": "streaming",
+      "label": "STREAMING",
+      "command": ["jellyfinmediaplayer", "--tv", "--fullscreen"],
+      "_note": "Jellyfin Media Player in TV mode, pointed at the Jellyfin server on your NAS."
+    },
+    {
+      "id": "livetv",
+      "label": "LIVE TV",
+      "command": ["jellyfinmediaplayer", "--tv", "--fullscreen"],
+      "_note": "Same client — Jellyfin Live TV with the iptv-org M3U playlist configured server-side. Alternatively swap for hypnotix."
+    },
+    {
+      "id": "music",
+      "label": "MUSIC",
+      "command": ["feishin"],
+      "_note": "Feishin connected to Navidrome on the NAS. Spotify plays via spotifyd (Spotify Connect) in the background — phone is the remote."
+    },
+    {
+      "id": "gaming",
+      "label": "GAMING",
+      "command": ["steam", "-gamepadui"],
+      "_note": "Steam Big Picture. For max smoothness wrap in gamescope: [\"gamescope\", \"-e\", \"-f\", \"--\", \"steam\", \"-gamepadui\"]"
+    },
+    {
+      "id": "apps",
+      "label": "APPS",
+      "command": null,
+      "_note": "Reserved — point at anything (RetroArch, a browser, etc.)."
+    },
+    {
+      "id": "settings",
+      "label": "SETTINGS",
+      "command": ["foot", "htop"],
+      "_note": "Placeholder. Swap for a settings app or a terminal of your choice."
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+# /etc/udev/rules.d/99-wake-controller.rules
+#
+# Allow the 8BitDo 2.4GHz dongle to wake the PC from suspend.
+# Find your dongle's IDs with `lsusb` (8BitDo vendor is 2dc8),
+# then adjust idProduct below if needed.
+#
+# Also required: enable USB wake / disable ErP in BIOS.
+
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2dc8", ATTR{power/wakeup}="enabled"
