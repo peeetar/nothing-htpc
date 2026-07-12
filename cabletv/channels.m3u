@@ -1,0 +1,60 @@
+#EXTM3U
+# nothing-htpc curated cable lineup.
+# Format: tvg-chno = the channel number on your "cable box".
+# Numbers are stable — add channels at any free number, gaps are fine.
+# 991-993 are reserved for teletext (defined in cabletv.lua).
+#
+# Sources: iptv-org (github.com/iptv-org/iptv), publicly available streams.
+# [Geo] = geo-blocked to MK — works from home, not from elsewhere.
+# Paste me more m3u playlists in chat and I'll extract + merge channels here.
+
+#EXTINF:-1 tvg-chno="1",MRT 1
+https://s1.teve.mk/tvstanici/6/playlist.m3u8
+#EXTINF:-1 tvg-chno="2",MRT 2
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(MRT_2)/index.m3u8
+#EXTINF:-1 tvg-chno="3",Sitel
+https://teve.mk/tvstanici/s1/playlist.m3u8
+#EXTINF:-1 tvg-chno="4",Kanal 5
+https://s2.teve.mk/tvstanici/2/playlist.m3u8
+#EXTINF:-1 tvg-chno="5",Alsat
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Alsat_M)/index.m3u8
+#EXTINF:-1 tvg-chno="6",TV21
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(TV21)/index.m3u8
+#EXTINF:-1 tvg-chno="7",TV 24
+https://s1.teve.mk/tvstanici/5/playlist.m3u8
+#EXTINF:-1 tvg-chno="8",Nasha TV
+https://stream.nasatv.com.mk/hls/nasatv_live.m3u8
+#EXTINF:-1 tvg-chno="9",M-Net HD
+https://live.mnet.mk/hls/mnet.m3u8
+#EXTINF:-1 tvg-chno="10",M-Net Info
+https://live.mnet.mk/hls/mnet-info.m3u8
+#EXTINF:-1 tvg-chno="11",M-Net Sport
+https://live.mnet.mk/hls/mnet-sport.m3u8
+#EXTINF:-1 tvg-chno="12",M-Net Kids
+http://ares.mnet.mk/hls/mnet-kids.m3u8
+#EXTINF:-1 tvg-chno="13",Cool TV
+https://stream.nasatv.com.mk/cooltv/hls/cooltv_live.m3u8
+#EXTINF:-1 tvg-chno="14",Folk TV
+https://stream.nasatv.com.mk/folktv/hls/folktv_live.m3u8
+#EXTINF:-1 tvg-chno="15",Jazz TV
+https://stream.nasatv.com.mk/jazztv/hls/jazztv_live.m3u8
+#EXTINF:-1 tvg-chno="16",Rock TV
+https://stream.nasatv.com.mk/rocktv/hls/rocktv_live.m3u8
+#EXTINF:-1 tvg-chno="17",Love TV
+https://stream.nasatv.com.mk/lovetv/hls/lovetv_live.m3u8
+#EXTINF:-1 tvg-chno="18",Sky Folk TV
+https://eu.live.skyfolk.mk/live.m3u8
+#EXTINF:-1 tvg-chno="19",TopEstrada TV
+http://live.topestrada.com/live/topestrada/playlist.m3u8
+#EXTINF:-1 tvg-chno="20",Star Plus Music
+https://live.muzickatv.mk/live/StarMusic2.m3u8
+#EXTINF:-1 tvg-chno="21",TV Shenja
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(TV_Shenja)/index.m3u8
+#EXTINF:-1 tvg-chno="22",MTM 1
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(MTM)/index.m3u8
+#EXTINF:-1 tvg-chno="23",Sobraniski kanal
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Sobraniski_Kanal)/index.m3u8
+#EXTINF:-1 tvg-chno="24",TV ERA
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(ERA)/index.m3u8
+#EXTINF:-1 tvg-chno="25",Sutel TV
+https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Shutel)/index.m3u8

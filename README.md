@@ -47,6 +47,7 @@ server/server.py             backend
 server/config.json           tiles + weather coords
 server/config.vm.json        lightweight stand-in apps for VM testing
 daemon/homebutton.py         hold-guide-to-go-home daemon
+cabletv/                     old-school cable TV mode for LIVE TV (see cabletv/README.md)
 system/start-session.sh      what cage runs
 system/htpc-session.service  boots straight into the kiosk
 system/cec-tv.sh             suspend/wake hook → TV on/off via CEC
@@ -78,7 +79,7 @@ desktop environment" and "GNOME"; **check** "SSH server" and
 
 ```bash
 sudo apt update
-sudo apt install -y cage chromium python3 python3-evdev \
+sudo apt install -y cage chromium python3 python3-evdev mpv \
     cec-utils mesa-vulkan-drivers firmware-amd-graphics \
     pipewire pipewire-audio wireplumber git curl unzip
 sudo usermod -aG input,video,audio petar
@@ -93,7 +94,7 @@ the display. Group changes need a re-login/reboot to apply.)
 git clone https://github.com/peeetar/nothing-htpc /home/petar/nothing-htpc
 cd /home/petar/nothing-htpc
 sudo mkdir -p /opt/htpc
-sudo cp -r launcher server daemon system /opt/htpc/
+sudo cp -r launcher server daemon system cabletv /opt/htpc/
 sudo chmod +x /opt/htpc/system/start-session.sh
 sudo chown -R petar:petar /opt/htpc
 ```
@@ -268,7 +269,7 @@ the launcher/config after editing on GitHub:
 
 ```bash
 cd ~/nothing-htpc && git pull
-sudo cp -r launcher server daemon system /opt/htpc/
+sudo cp -r launcher server daemon system cabletv /opt/htpc/
 sudo chown -R petar:petar /opt/htpc
 sudo systemctl restart htpc-session
 ```

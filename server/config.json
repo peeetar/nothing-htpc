@@ -14,8 +14,8 @@
     {
       "id": "livetv",
       "label": "LIVE TV",
-      "command": ["jellyfinmediaplayer", "--tv", "--fullscreen"],
-      "_note": "Same client — Jellyfin Live TV with the iptv-org M3U playlist configured server-side. Alternatively swap for hypnotix."
+      "command": ["bash", "/opt/htpc/cabletv/cabletv.sh"],
+      "_note": "Custom cable TV mode: mpv + cabletv.lua. Channels in cabletv/channels.m3u, teletext on 991-993. Needs: apt install mpv."
     },
     {
       "id": "music",
