@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n *)",
+      "Bash(python3 -m py_compile *)",
+      "Bash(luac5.4 -p *)",
+      "Bash(curl -s localhost:8484/*)",
+      "Bash(curl -s 127.0.0.1:8484/*)"
+    ]
+  }
+}
