@@ -7,3 +7,9 @@ __pycache__/
 # (coordinates, app choices) survive a git pull. server.py prefers it over
 # server/config.json when it exists.
 server/config.local.json
+
+# ee3 daemon credentials (EE3_USERNAME / EE3_PASSWORD). Lives on the LXC, not
+# the Pi, and must never end up in the repo — movieapi.py reads it via
+# EE3_ENV_FILE.
+server/ee3.env
+*.tsv.tmp

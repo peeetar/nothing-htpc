@@ -16,6 +16,11 @@ local utils = require "mp.utils"
 local DIR             = os.getenv("CABLETV_DIR") or (os.getenv("HOME") .. "/nothing-htpc/cabletv")
 local CHANNELS_FILE   = DIR .. "/channels.m3u"
 local LIBRARY_FILE    = DIR .. "/library.tsv"
+-- library.tsv's url column holds `ee3:<id>`, not a playable URL - the links
+-- are minted per playback and would be stale by the time anyone pressed OK.
+-- This turns one into a URL, at play time, by asking the daemon on the LXC.
+local RESOLVER        = DIR .. "/ee3resolve.py"
+local RESOLVE_SECONDS = tonumber(os.getenv("CABLETV_RESOLVE_SECONDS")) or 130
 local FONT            = "Press Start 2P"
 local BANNER_SECONDS  = 5
 -- Overridable because static is uncompressed: every tick hands mpv another
@@ -93,6 +98,10 @@ local rss_cache = {}       -- key -> {t=, pages=}
 local wx_cache = nil       -- {t=, wx=}
 local library = nil        -- kind -> sorted list of {title=, year=, url=}
 local ondemand = nil       -- the library entry currently playing, if any
+-- Bumped whenever the box decides to watch something else. A resolve can take
+-- a minute, and a reply that arrives after the viewer has zapped away must not
+-- yank them back - the callback compares against this and drops itself.
+local resolve_seq = 0
 
 -- ass colors (BGR!) -------------------------------------------------------------
 local C_GREEN  = "&H33FF33&"
@@ -1078,23 +1087,78 @@ local function tt_letter_jump(dir)
   tt_render()
 end
 
+-- Commit to playing a film once there is a real URL for it.
+local function play_ondemand(it, url, pageno)
+  ondemand = it
+  dead, loading, playing = false, true, nil
+  static_on()
+  mp.commandv("loadfile", url, "replace")
+  show_banner(pageno, it.title)
+end
+
+-- `ee3:<id>` -> a URL, via ee3resolve.py on the LXC daemon. Async, because
+-- the site may still be caching the torrent and this can take a minute; the
+-- main thread must stay free or the box looks frozen (constraint 4's cousin).
+local function resolve_and_play(it, pageno)
+  resolve_seq = resolve_seq + 1
+  local myseq = resolve_seq
+  dead, loading, playing = false, true, nil
+  static_on()
+  show_banner(pageno, "RESOLVING - " .. it.title)
+
+  mp.command_native_async(
+    { name = "subprocess", playback_only = false,
+      capture_stdout = true, capture_stderr = true,
+      args = { "python3", RESOLVER, it.url } },
+    guard(function(ok, result)
+      -- Zapped away, or asked for something else, while we were waiting.
+      if myseq ~= resolve_seq then return end
+      local url = ok and result and result.status == 0
+                  and (result.stdout or ""):match("^%s*(.-)%s*$") or nil
+      if url and url ~= "" then
+        play_ondemand(it, url, pageno)
+        return
+      end
+      -- ee3resolve.py puts one human sentence on stderr; that is the whole
+      -- point of it, so show that rather than a status code.
+      local why = (result and result.stderr or ""):match("([^\n]+)%s*$") or ""
+      if why == "" then why = "RESOLVE FAILED" end
+      loading = false
+      static_off()
+      if TELETEXT[pageno] then tt_open(pageno) end
+      show_banner(pageno, usub(why:upper(), 40))
+    end))
+
+  -- A resolve that never comes back would leave static up forever. The daemon
+  -- has its own deadline; this is the backstop for the daemon being gone.
+  mp.add_timeout(RESOLVE_SECONDS, guard(function()
+    if myseq ~= resolve_seq or ondemand then return end
+    resolve_seq = resolve_seq + 1
+    loading = false
+    static_off()
+    if TELETEXT[pageno] then tt_open(pageno) end
+    show_banner(pageno, "RESOLVE TIMED OUT")
+  end))
+end
+
 local function tt_play_selected()
   local row = tt and tt.lines and tt.lines[tt.cur or -1]
   local it = row and row.item
   if not it then return end
   if it.url == "" then
-    -- The catalogue is real, the backend behind it is not wired up yet. Say
-    -- so on the banner rather than dropping to silent static.
+    -- An entry with no url at all: the catalogue knows the title, nothing
+    -- knows where to get it. Say so rather than dropping to silent static.
     show_banner(tt.no, "NO SOURCE - " .. it.title)
     return
   end
   local pageno = tt.no
-  ondemand = it
   tt_close()
-  dead, loading, playing = false, true, nil
-  static_on()
-  mp.commandv("loadfile", it.url, "replace")
-  show_banner(pageno, it.title)
+  if it.url:sub(1, 4) == "ee3:" then
+    resolve_and_play(it, pageno)
+  else
+    resolve_seq = resolve_seq + 1   -- cancel any resolve still in flight
+    play_ondemand(it, it.url, pageno)
+  end
 end
 
 ------------------------------------------------------------------- tuning -----
@@ -1144,8 +1208,11 @@ local function tune(no)
   stop_retry()
   digit_buf = ""
   -- Zapping abandons a film: from here on end-file is a channel's business
-  -- again, not the library's.
+  -- again, not the library's. That includes one still being resolved - the
+  -- reply is dropped rather than pulling the viewer off the channel they
+  -- just chose.
   ondemand = nil
+  resolve_seq = resolve_seq + 1
   current = no
   show_banner(no, chan_name(no))
 

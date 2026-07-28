@@ -272,11 +272,54 @@ Live channels live in `cabletv/channels.m3u`; free IPTV lists come from
 
 On-demand films and series are teletext pages 993 and 994, read from
 `cabletv/library.tsv`. Highlight a row, press OK, mpv plays it — the same
-loadfile path a channel uses. **That file currently holds placeholder rows
-with no urls**: the browser is finished, but nothing generates the file
-yet, so a row reports `NO SOURCE` rather than playing. Whatever ends up
-filling it does the parsing and writes the four columns; the player never
-learns where the titles came from.
+loadfile path a channel uses. The file has four columns
+(`kind, title, year, url`) and the player never learns where the titles came
+from; whatever fills the file does the parsing.
+
+### The on-demand backend
+
+What fills it is `server/movieapi.py`, and **it does not run on the Pi.** It
+is a FastAPI daemon that holds an ee3 session, and it lives on its own LXC at
+`192.168.1.16:1209`. That separation is the point: `server.py` and
+`gen_static.py` are stdlib-only because the Pi has no pip packages and no
+room in 1GB for a second daemon, so anything with dependencies goes on
+another box. Nothing on the Pi imports it — the Pi talks HTTP to it through
+`cabletv/ee3resolve.py`, which is stdlib.
+
+```
+Pi                                  LXC 192.168.1.16:1209
+  cabletv.lua  ── ee3resolve.py ──►   movieapi.py ──► ee3.me
+                                                 └──► torrentio
+```
+
+| Endpoint | |
+|---|---|
+| `GET /health` | auth state (no password in the reply) |
+| `GET /movies` | proxy of ee3's `/api/movies`; all filters pass through |
+| `GET /resolve/{id}` | one movie id → a URL mpv can open |
+| `GET /library.tsv` | the whole catalogue, ready for `cabletv/library.tsv` |
+
+Credentials come from the environment, never the repo:
+
+```bash
+# on the LXC
+pip install fastapi httpx uvicorn
+printf 'EE3_USERNAME=you\nEE3_PASSWORD=secret\n' > server/ee3.env  # gitignored
+chmod 600 server/ee3.env
+EE3_ENV_FILE=server/ee3.env python3 server/movieapi.py
+curl -s localhost:1209/health
+```
+
+`server/ee3-api.service` is a unit for it. On the Pi, refresh the catalogue
+with `cabletv/ee3resolve.py --library` and set `EE3_API` if the daemon is not
+at the default address.
+
+`/resolve` filters what it offers to what a 3B+ can actually decode: H.264,
+1080p max, no HEVC/VP9/AV1. That is the same constraint as everywhere else in
+this project, applied at the point where a stream gets chosen — a 2160p HEVC
+remux is not "better quality" on this box, it is a slideshow. Override per
+call with `?max_height=` / `?allow_hevc=true` if you ever run it against
+something bigger.
 
 Prior to July 2026 there was a separate STREAMING tile running
 `jellyfin-mpv-shim` as a phone-cast target. It is gone — the remote drives

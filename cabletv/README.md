@@ -116,11 +116,39 @@ done with them. Rows come from `library.tsv` (tab-separated:
 Letter-jump is there because paging a few hundred titles eleven rows at a
 time with a d-pad is unusable.
 
-**`library.tsv` currently ships placeholder rows with no urls** — the
-catalogue browser is finished, but nothing generates that file yet. A row
-with an empty url says `NO SOURCE` on the banner and plays nothing.
+A row with an empty url says `NO SOURCE` on the banner and plays nothing.
 Regenerate the whole file to fill it; unlike `channels.m3u`, nothing in it
 is hand-maintained state.
+
+#### Where the urls come from
+
+The url column normally holds `ee3:<id>`, not a playable URL — ee3 mints a
+link per playback, so anything baked into the file would be dead by the time
+someone pressed OK. Pressing A on such a row runs `ee3resolve.py`, which asks
+the daemon (`server/movieapi.py`, on the LXC at `192.168.1.16:1209`) for a
+fresh one. The banner reads `RESOLVING - <title>` while that happens, and the
+picture stays on static; the resolve is async, so channel-up still works and
+zapping away cancels it rather than yanking you back a minute later.
+
+If it fails you get one sentence on the banner — `NO STREAMS AVAILABLE`,
+`EE3 DAEMON UNREACHABLE AT ...` — and the page you came from, not silent
+static.
+
+```bash
+# refresh the catalogue (writes library.tsv atomically)
+cabletv/ee3resolve.py --library
+
+# resolve one id by hand, to see what the box would see
+cabletv/ee3resolve.py ee3:6f2a91c
+```
+
+A plain `http(s)://` or `av://` url in that column still plays directly, so
+the file is not tied to ee3.
+
+| Env | |
+|---|---|
+| `EE3_API` | daemon base url (default `http://192.168.1.16:1209`) |
+| `CABLETV_RESOLVE_SECONDS` | give up on a resolve after this long (default 130) |
 
 A film is not a channel: when one ends or fails, you go back to the page
 you picked it from instead of into the dead-channel retry loop.

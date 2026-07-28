@@ -1,0 +1,40 @@
+# ee3 API daemon — FOR THE LXC (192.168.1.16), NOT FOR THE PI.
+#
+# The Pi's unit is system/htpc-session.service; this one has nothing to do
+# with it and install.sh does not touch it. Everything with pip dependencies
+# lives here so the Pi stays stdlib-only (CLAUDE.md constraints 7 and 11).
+#
+#   install -m600 server/ee3.env /etc/ee3.env     # EE3_USERNAME= / EE3_PASSWORD=
+#   cp server/ee3-api.service /etc/systemd/system/
+#   systemctl enable --now ee3-api
+#
+# Adjust User=, WorkingDirectory= and ExecStart= to wherever the clone sits on
+# the LXC. Unlike the Pi's unit, nothing rewrites these for you.
+
+[Unit]
+Description=ee3 API daemon (nothing-htpc on-demand backend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ee3
+WorkingDirectory=/opt/nothing-htpc/server
+# Credentials by file, never on the command line — /proc/*/cmdline is world
+# readable, and this password is a real account.
+EnvironmentFile=/etc/ee3.env
+Environment=EE3_HOST=0.0.0.0
+Environment=EE3_PORT=1209
+ExecStart=/usr/bin/python3 /opt/nothing-htpc/server/movieapi.py
+Restart=always
+RestartSec=5
+
+# The daemon holds one session cookie and talks to two hosts; it has no
+# business writing anywhere or seeing the rest of the filesystem.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target
