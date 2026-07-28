@@ -24,16 +24,25 @@
     user-select: none;
     -webkit-user-select: none;
   }
-  body.preview { cursor: default; }
 
   /* ---------- layout ---------- */
-  #stage {
-    height: 100vh;
+  #stage { height: 100vh; position: relative; }
+
+  /* Views are stacked, not swapped. The incoming one fades up over the
+     outgoing one, which stays fully opaque until the fade finishes — a
+     plain crossfade would dip through black at the halfway point, and
+     the whole point of keeping music in-page is that nothing ever goes
+     black between the launcher and the music screen. */
+  .view {
+    position: absolute; inset: 0;
+    padding: 4.5vh 5vw;
     display: flex;
     flex-direction: column;
-    padding: 4.5vh 5vw;
-    position: relative;
+    opacity: 0;
+    transition: opacity 220ms ease;
   }
+  .view.on { opacity: 1; }
+  .view.front { z-index: 2; }
 
   /* top bar */
   #topbar {
@@ -115,8 +124,88 @@
   .tile.sel .dotlabel { display: block; }
   .tile.sel .marker { background: var(--red); }
 
+  /* now-playing strip on the home screen — the music view in one line.
+     Height is always reserved so the menu never shifts when a track starts. */
+  #nowplaying {
+    display: flex; align-items: center; gap: 0.9em;
+    min-height: 2.4em;
+    margin-bottom: 2vh;   /* the selected tile lifts 1.2vh into this row */
+    letter-spacing: 0.3em;
+    font-size: clamp(9px, 0.9vw, 12px);
+    color: var(--dim);
+    opacity: 0;
+    transition: opacity 300ms ease;
+    white-space: nowrap; overflow: hidden;
+  }
+  #nowplaying.on { opacity: 1; }
+  #nowplaying .npdot {
+    width: 0.5em; height: 0.5em; border-radius: 50%;
+    background: var(--red); flex: none;
+  }
+  #nowplaying .nplabel { color: var(--faint); }
+
+  /* ---------- music view ---------- */
+  #mtop {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    letter-spacing: 0.35em;
+    font-size: clamp(11px, 1.2vw, 15px);
+    color: var(--dim);
+  }
+  #mtop .mlead { display: flex; align-items: center; gap: 0.9em; }
+  #mtop .mdot {
+    width: 0.62em; height: 0.62em; border-radius: 50%;
+    background: var(--red); flex: none;
+    animation: breathe 4s ease-in-out infinite;
+  }
+  #mstate { color: var(--faint); }
+
+  #mbody {
+    flex: 1;
+    display: flex; align-items: center; gap: 4vw;
+    min-height: 0;
+  }
+  #mart {
+    width: clamp(120px, 24vh, 260px);
+    height: clamp(120px, 24vh, 260px);
+    flex: none;
+    line-height: 0;
+  }
+  #mart svg { width: 100%; height: 100%; display: block; }
+  #minfo { min-width: 0; display: flex; flex-direction: column; gap: 2.2vh; }
+  #mtitle { line-height: 0; }
+  #martist {
+    letter-spacing: 0.32em;
+    font-size: clamp(11px, 1.15vw, 16px);
+    color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #malbum {
+    letter-spacing: 0.3em;
+    font-size: clamp(9px, 0.9vw, 12px);
+    color: var(--faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  #mprogwrap { display: flex; flex-direction: column; gap: 1.1vh; padding-bottom: 1vh; }
+  #mbar { position: relative; height: 1px; background: #1F1F1F; }
+  #mfill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--ink); }
+  /* translateX, not left: the playhead moves 4x a second, and a composited
+     transform keeps that off the Pi's layout path. */
+  #mhead {
+    position: absolute; top: 50%; left: 0;
+    width: 0.5em; height: 0.5em; margin: -0.25em 0 0 -0.25em;
+    border-radius: 50%; background: var(--red);
+    transition: transform 250ms linear;
+  }
+  #mtimes {
+    display: flex; justify-content: space-between;
+    letter-spacing: 0.3em;
+    font-size: clamp(9px, 0.85vw, 12px);
+    color: var(--faint);
+  }
+
   /* footer hints */
-  #hints {
+  #hints, #mhints {
     display: flex;
     gap: 3.5em;
     margin-top: 4vh;
@@ -124,13 +213,15 @@
     font-size: clamp(9px, 0.85vw, 12px);
     color: var(--faint);
   }
-  #hints b { color: var(--dim); font-weight: 400; }
+  #hints b, #mhints b { color: var(--dim); font-weight: 400; }
 
   /* toast */
   #toast {
     position: absolute;
     left: 50%; bottom: 5vh;
-    transform: translate(-50%, 200%);
+    /* 100% + the bottom offset, so it parks fully off-screen whatever its
+       height works out to. A flat 200% left a sliver of it showing. */
+    transform: translate(-50%, calc(100% + 5vh));
     background: #0D0D0D;
     border: 1px solid #1F1F1F;
     padding: 1em 1.8em;
@@ -160,6 +251,7 @@
 </head>
 <body>
 <div id="stage">
+<div id="homeview" class="view on">
   <div id="topbar">
     <div id="datewrap"><span id="reddot"></span><span id="datetext">—</span></div>
     <div id="weather">
@@ -174,6 +266,8 @@
     <div id="greeting">—</div>
   </div>
 
+  <div id="nowplaying"><span class="npdot"></span><span id="nptext"></span></div>
+
   <div id="menu"></div>
 
   <div id="hints">
@@ -183,18 +277,46 @@
   </div>
 </div>
 
+<div id="musicview" class="view" style="display:none">
+  <div id="mtop">
+    <div class="mlead"><span class="mdot"></span><span>SPOTIFY CONNECT</span></div>
+    <div id="mstate">—</div>
+  </div>
+
+  <div id="mbody">
+    <div id="mart"></div>
+    <div id="minfo">
+      <div id="mtitle"></div>
+      <div id="martist">—</div>
+      <div id="malbum"></div>
+    </div>
+  </div>
+
+  <div id="mprogwrap">
+    <div id="mbar"><div id="mfill"></div><div id="mhead"></div></div>
+    <div id="mtimes"><span id="mpos">0:00</span><span id="mlen">0:00</span></div>
+  </div>
+
+  <div id="mhints">
+    <span><b>◂ ▸</b>&nbsp;&nbsp;TRACK</span>
+    <span><b>Ⓐ</b>&nbsp;&nbsp;PLAY / PAUSE</span>
+    <span><b>Ⓑ</b>&nbsp;&nbsp;BACK</span>
+  </div>
+</div>
+</div>
+
 <div id="toast"><span class="tdot"></span><span id="toasttext"></span></div>
 <div id="veil"></div>
 
 <script>
 /* =========================================================
    NOTHING-STYLE HTPC LAUNCHER
-   Serves as both preview (browser/artifact) and production
-   kiosk UI. In production, the backend at :8484 launches apps.
+   Production kiosk UI. The backend at :8484 owns the app list
+   and launches/kills apps — there is no offline/demo path:
+   every Ⓐ press is a real launch, and a failure says why.
    ========================================================= */
 
 const BACKEND = location.port === "8484" ? "" : "http://localhost:8484";
-let previewMode = false;
 
 /* ---------- 5x7 dot-matrix glyph engine ---------- */
 const GLYPHS = {
@@ -237,6 +359,20 @@ const GLYPHS = {
   "Z":["11111","00001","00010","00100","01000","10000","11111"],
   "°":["01100","10010","10010","01100","00000","00000","00000"],
   " ":["00000","00000","00000","00000","00000","00000","00000"],
+  // Punctuation exists for track titles. Without it "DON'T STOP (LIVE)"
+  // renders as "DON T STOP  LIVE " — unknown glyphs fall back to space.
+  "-":["00000","00000","00000","11111","00000","00000","00000"],
+  ".":["00000","00000","00000","00000","00000","01100","01100"],
+  ",":["00000","00000","00000","00000","01100","01100","11000"],
+  "'":["01100","01100","11000","00000","00000","00000","00000"],
+  "!":["00100","00100","00100","00100","00100","00000","00100"],
+  "?":["01110","10001","00001","00110","00100","00000","00100"],
+  "&":["01100","10010","10100","01000","10101","10010","01101"],
+  "(":["00010","00100","01000","01000","01000","00100","00010"],
+  ")":["01000","00100","00010","00010","00010","00100","01000"],
+  "/":["00001","00010","00010","00100","01000","01000","10000"],
+  "+":["00000","00100","00100","11111","00100","00100","00000"],
+  "*":["00000","10101","01110","11111","01110","10101","00000"],
 };
 
 /* Render text as an SVG of round dots. Ghost dots (off) are
@@ -327,20 +463,17 @@ setInterval(loadWeather, 15 * 60 * 1000);
 
 /* ---------- menu ---------- */
 const ICONS = {
-  streaming: '<svg viewBox="0 0 40 40"><rect x="4" y="8" width="32" height="22" rx="1"/><path d="M17 14v10l9-5z"/><path d="M13 35h14"/></svg>',
-  livetv:    '<svg viewBox="0 0 40 40"><rect x="4" y="12" width="32" height="22" rx="1"/><path d="M13 12 20 5l7 7"/><circle cx="30" cy="18" r="1.4" fill="currentColor"/></svg>',
+  tv:        '<svg viewBox="0 0 40 40"><rect x="4" y="12" width="32" height="22" rx="1"/><path d="M13 12 20 5l7 7"/><circle cx="30" cy="18" r="1.4" fill="currentColor"/></svg>',
   music:     '<svg viewBox="0 0 40 40"><path d="M14 30V9l18-3v20"/><circle cx="10" cy="30" r="4"/><circle cx="28" cy="26" r="4"/></svg>',
-  gaming:    '<svg viewBox="0 0 40 40"><path d="M9 26c-3 0-5-9 0-11 4-1.6 18-1.6 22 0 5 2 3 11 0 11-3 0-4-4-7-4h-8c-3 0-4 4-7 4z"/><path d="M13 19v4M11 21h4"/><circle cx="28" cy="20" r="1.3" fill="currentColor"/><circle cx="31" cy="23" r="1.3" fill="currentColor"/></svg>',
   apps:      '<svg viewBox="0 0 40 40"><rect x="6" y="6" width="11" height="11"/><rect x="23" y="6" width="11" height="11"/><rect x="6" y="23" width="11" height="11"/><rect x="23" y="23" width="11" height="11"/></svg>',
   settings:  '<svg viewBox="0 0 40 40"><path d="M6 12h20M32 12h2M6 28h8M20 28h14"/><circle cx="28" cy="12" r="3.5"/><circle cx="16" cy="28" r="3.5"/></svg>',
 };
 const FALLBACK_APPS = [
-  { id: "streaming", label: "STREAMING" },
-  { id: "livetv",    label: "LIVE TV" },
-  { id: "music",     label: "MUSIC" },
-  { id: "gaming",    label: "GAMING" },
-  { id: "apps",      label: "APPS" },
-  { id: "settings",  label: "SETTINGS" },
+  { id: "tv",       label: "TV" },
+  // view, not command: music is a screen in this page, not a process.
+  { id: "music",    label: "MUSIC", view: "music" },
+  { id: "apps",     label: "APPS" },
+  { id: "settings", label: "SETTINGS" },
 ];
 let APPS = FALLBACK_APPS;
 let sel = 0;
@@ -380,41 +513,281 @@ function showToast(msg, ms = 2200) {
 }
 async function launch() {
   const app = APPS[sel];
-  if (previewMode) {
-    showToast(`PREVIEW · WOULD LAUNCH ${app.label}`);
-    return;
-  }
-  document.getElementById("veil").classList.add("on");
+
+  // In-page views launch nothing, so there is no veil and no wait — the
+  // music screen fades up over the launcher in one motion.
+  if (app.view === "music") { showView("music"); return; }
+
+  const veil = document.getElementById("veil");
+  veil.classList.add("on");
+  let started = false;
   try {
-    await fetch(`${BACKEND}/launch/${app.id}`, { method: "POST" });
-    showToast(`OPENING ${app.label}`);
+    const res = await fetch(`${BACKEND}/launch/${app.id}`, { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    started = body.ok === true;
+    showToast(started ? `OPENING ${app.label}` : (body.msg || "LAUNCH FAILED").toUpperCase());
   } catch (_) {
-    showToast(`BACKEND OFFLINE · CHECK SERVER`);
+    showToast("BACKEND OFFLINE · CHECK SERVER");
   }
-  setTimeout(() => document.getElementById("veil").classList.remove("on"), 4000);
+  // Nothing is coming up over us on failure — don't sit on a black screen.
+  setTimeout(() => veil.classList.remove("on"), started ? 4000 : 0);
 }
 
-/* Ask backend for the real app list; if unreachable, run in preview mode. */
-async function loadApps() {
+/* The backend owns the app list. It starts a moment before this page, so
+   keep retrying rather than settling for the placeholder tiles. */
+async function loadApps(attempt = 0) {
   try {
     const cfg = await fetch(BACKEND + "/config", { signal: AbortSignal.timeout(2500) }).then(r => r.json());
     if (Array.isArray(cfg.apps) && cfg.apps.length) APPS = cfg.apps;
+    buildMenu();
   } catch (_) {
-    previewMode = true;
-    document.body.classList.add("preview");
+    if (attempt === 0) buildMenu();  // placeholder tiles so the screen isn't bare
+    if (attempt === 2) showToast("BACKEND OFFLINE · CHECK SERVER", 4000);
+    setTimeout(() => loadApps(attempt + 1), 2000);
   }
-  buildMenu();
 }
 
-/* ---------- input: keyboard ---------- */
+/* =========================================================
+   VIEWS
+   ========================================================= */
+let view = "home";
+
+function showView(name) {
+  if (view === name) return;
+  const from = document.getElementById(view + "view");
+  const to = document.getElementById(name + "view");
+  view = name;
+
+  to.style.display = "flex";
+  to.classList.add("front");
+  // Two frames: one for display to take effect, one for the class change to
+  // register as a transition rather than an instant jump.
+  requestAnimationFrame(() => requestAnimationFrame(() => to.classList.add("on")));
+  setTimeout(() => {
+    from.classList.remove("on");
+    from.style.display = "none";
+    to.classList.remove("front");
+  }, 240);
+
+  if (name === "music") { pollMusic(); }
+}
+
+/* =========================================================
+   MUSIC — spotifyd over MPRIS, rendered in the launcher's own language.
+   Playback is driven from the phone (Spotify Connect); this screen shows
+   what is on and offers the three controls a remote can reach.
+   Volume is deliberately absent — that is the TV's job.
+   ========================================================= */
+const mArt = document.getElementById("mart");
+const mTitle = document.getElementById("mtitle");
+const mArtist = document.getElementById("martist");
+const mAlbum = document.getElementById("malbum");
+const mState = document.getElementById("mstate");
+const mBar = document.getElementById("mbar");
+const mFill = document.getElementById("mfill");
+const mHead = document.getElementById("mhead");
+const mPos = document.getElementById("mpos");
+const mLen = document.getElementById("mlen");
+const npEl = document.getElementById("nowplaying");
+const npText = document.getElementById("nptext");
+
+const music = {
+  available: true,   // false once we know playerctl is absent — stop polling
+  playing: false,
+  trackKey: "",
+  length: 0,
+  posBase: 0,        // last position reported by the backend
+  posAt: 0,          // performance.now() when it was reported
+  seq: null,         // /home counter, so the TV remote's Exit closes this view
+};
+
+function mmss(s) {
+  s = Math.max(0, Math.floor(s || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/* Cover art as a halftone dot grid: same visual vocabulary as the clock,
+   and it keeps a photographic album cover from looking pasted onto the
+   design. Redrawn once per track, never per frame. */
+const ART_N = 34;
+function artPlaceholder() {
+  const step = 100 / ART_N;
+  let s = "";
+  for (let y = 0; y < ART_N; y++)
+    for (let x = 0; x < ART_N; x++)
+      s += `<circle cx="${(x + .5) * step}" cy="${(y + .5) * step}" r="${step * .16}"/>`;
+  return `<svg viewBox="0 0 100 100" fill="var(--dot-off)">${s}</svg>`;
+}
+function drawArt(img) {
+  const c = document.createElement("canvas");
+  c.width = c.height = ART_N;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.drawImage(img, 0, 0, ART_N, ART_N);
+  let d;
+  try { d = g.getImageData(0, 0, ART_N, ART_N).data; }
+  catch (_) { return artPlaceholder(); }   // tainted canvas: fail quietly
+  const step = 100 / ART_N;
+  let s = "";
+  for (let y = 0; y < ART_N; y++) {
+    for (let x = 0; x < ART_N; x++) {
+      const i = (y * ART_N + x) * 4;
+      const lum = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+      const r = (step / 2) * (0.14 + 0.86 * lum);
+      if (r < 0.1) continue;
+      s += `<circle cx="${(x + .5) * step}" cy="${(y + .5) * step}" r="${r.toFixed(2)}"/>`;
+    }
+  }
+  return `<svg viewBox="0 0 100 100" fill="var(--ink)">${s}</svg>`;
+}
+function loadArt(hasArt) {
+  if (!hasArt) { mArt.innerHTML = artPlaceholder(); return; }
+  const img = new Image();
+  img.crossOrigin = "anonymous";   // backend sends ACAO:*, so pixels stay readable
+  img.onload = () => { mArt.innerHTML = drawArt(img); };
+  img.onerror = () => { mArt.innerHTML = artPlaceholder(); };
+  img.src = `${BACKEND}/music/art?t=${Date.now()}`;
+}
+
+/* Track titles are long and arbitrary, so the dot size is solved for rather
+   than picked: dotSVG advances step*(5 + charGap) per glyph with
+   step = dotPx * 1.55, so a title of n characters fits the column at
+   dotPx = width / (n * 10.23). A fixed viewport fraction runs "HOPPIPOLLA
+   (DON'T STOP!)" straight off the right edge of a 1080p screen. */
+const TITLE_CHAR_GAP = 1.6;
+const TITLE_PER_CHAR = 1.55 * (5 + TITLE_CHAR_GAP);
+function titleDots(text) {
+  const MAX = 28;
+  let t = (text || "").toUpperCase();
+  if (t.length > MAX) t = t.slice(0, MAX - 3).trimEnd() + "...";
+  const n = Math.max(1, t.length);
+  const avail = (mTitle.clientWidth || innerWidth * 0.55) * 0.98;
+  const size = Math.max(2.2, Math.min(innerHeight * 0.013, avail / (n * TITLE_PER_CHAR)));
+  return dotSVG(t, size, { charGap: TITLE_CHAR_GAP });
+}
+
+function applyMusic(s) {
+  // The TV remote's Exit key posts /home, which has no process to kill while
+  // this view is open — the counter is how we hear about it.
+  if (music.seq !== null && s.home_seq !== music.seq && view === "music") showView("home");
+  music.seq = s.home_seq;
+
+  music.available = s.available !== false;
+  music.playing = !!s.playing;
+
+  if (!music.available) {
+    mState.textContent = "UNAVAILABLE";
+    mTitle.innerHTML = titleDots("NO PLAYER");
+    mArtist.textContent = "PLAYERCTL IS NOT INSTALLED";
+    mAlbum.textContent = "";
+    mArt.innerHTML = artPlaceholder();
+    npEl.classList.remove("on");
+    return;
+  }
+
+  if (!s.status) {
+    mState.textContent = "IDLE";
+    mTitle.innerHTML = titleDots("NOTHING PLAYING");
+    mArtist.textContent = "START SPOTIFY ON YOUR PHONE";
+    mAlbum.textContent = "THIS BOX IS THE SPEAKER";
+    mArt.innerHTML = artPlaceholder();
+    music.trackKey = "";
+    music.length = 0;
+    mFill.style.width = "0%"; mHead.style.transform = "translateX(0)";
+    mPos.textContent = mLen.textContent = "0:00";
+    npEl.classList.remove("on");
+    return;
+  }
+
+  const key = `${s.artist} — ${s.title}`;
+  if (key !== music.trackKey) {
+    music.trackKey = key;
+    music.title = s.title;
+    mTitle.innerHTML = titleDots(s.title);
+    loadArt(s.art);
+  }
+  mArtist.textContent = (s.artist || "UNKNOWN ARTIST").toUpperCase();
+  mAlbum.textContent = (s.album || "").toUpperCase();
+  mState.textContent = s.playing ? "PLAYING" : "PAUSED";
+
+  music.length = s.length || 0;
+  music.posBase = s.position || 0;
+  music.posAt = performance.now();
+  mLen.textContent = mmss(music.length);
+  tickProgress();
+
+  npText.innerHTML =
+    `<span class="nplabel">${s.playing ? "NOW PLAYING" : "PAUSED"}</span>&nbsp;&nbsp;` +
+    `${(s.title || "").toUpperCase()} · ${(s.artist || "").toUpperCase()}`;
+  npEl.classList.add("on");
+}
+
+/* Position is interpolated between polls so the bar moves smoothly at 4 Hz
+   without asking the backend (and therefore playerctl) four times a second. */
+function tickProgress() {
+  if (view !== "music" || !music.length) return;
+  const drift = music.playing ? (performance.now() - music.posAt) / 1000 : 0;
+  const pos = Math.min(music.length, music.posBase + drift);
+  const pct = (pos / music.length) * 100;
+  mFill.style.width = `${pct}%`;
+  mHead.style.transform = `translateX(${mBar.clientWidth * pct / 100}px)`;
+  mPos.textContent = mmss(pos);
+}
+setInterval(tickProgress, 250);
+
+async function pollMusic() {
+  if (!music.available) return;
+  try {
+    const s = await fetch(`${BACKEND}/music/status`, { signal: AbortSignal.timeout(2500) })
+      .then(r => r.json());
+    applyMusic(s);
+  } catch (_) { /* backend blip — keep the last frame and try again */ }
+}
+
+/* Poll fast enough to feel live on the music screen, slowly on the home
+   screen where it only feeds a one-line strip, and not at all once we know
+   there is no player to ask. Each poll spawns a playerctl on the Pi. */
+function musicLoop() {
+  if (!music.available) return;
+  setTimeout(async () => { await pollMusic(); musicLoop(); },
+             view === "music" ? 1000 : 6000);
+}
+
+async function musicCmd(cmd) {
+  try {
+    const r = await fetch(`${BACKEND}/music/${cmd}`, { method: "POST" }).then(r => r.json());
+    if (!r.ok) showToast((r.msg || "MUSIC UNAVAILABLE").toUpperCase());
+  } catch (_) {
+    showToast("BACKEND OFFLINE · CHECK SERVER");
+  }
+  pollMusic();   // snap the UI to the new state instead of waiting for the tick
+}
+
+/* =========================================================
+   INPUT — one set of intents, routed by whichever view is up.
+   The same three gestures reach the gamepad, a keyboard, and the TV
+   remote (cecd.py turns CEC presses into these very keys).
+   ========================================================= */
+function onNav(dir) {
+  if (view === "music") musicCmd(dir > 0 ? "next" : "previous");
+  else move(dir);
+}
+function onOk() {
+  if (view === "music") musicCmd("playpause");
+  else launch();
+}
+function onBack() {
+  if (view === "music") showView("home");
+}
+
 addEventListener("keydown", (e) => {
-  if (e.key === "ArrowRight") move(1);
-  else if (e.key === "ArrowLeft") move(-1);
-  else if (e.key === "Enter") launch();
+  if (e.key === "ArrowRight") onNav(1);
+  else if (e.key === "ArrowLeft") onNav(-1);
+  else if (e.key === "Enter") onOk();
+  else if (e.key === "Escape" || e.key === "Backspace") onBack();
 });
 
 /* ---------- input: gamepad ---------- */
-const pad = { left: false, right: false, a: false };
+const pad = { left: false, right: false, a: false, b: false };
 function pollPads() {
   const gps = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const gp of gps) {
@@ -423,22 +796,31 @@ function pollPads() {
     const left  = (gp.buttons[14] && gp.buttons[14].pressed) || ax < -0.5;
     const right = (gp.buttons[15] && gp.buttons[15].pressed) || ax > 0.5;
     const a     = gp.buttons[0] && gp.buttons[0].pressed;
-    if (left && !pad.left) move(-1);
-    if (right && !pad.right) move(1);
-    if (a && !pad.a) launch();
-    pad.left = left; pad.right = right; pad.a = a;
+    const b     = gp.buttons[1] && gp.buttons[1].pressed;
+    if (left && !pad.left) onNav(-1);
+    if (right && !pad.right) onNav(1);
+    if (a && !pad.a) onOk();
+    if (b && !pad.b) onBack();
+    pad.left = left; pad.right = right; pad.a = a; pad.b = b;
     break;
   }
-  requestAnimationFrame(pollPads);
 }
+// 20 Hz, not requestAnimationFrame: rAF pins a core at 60 Hz forever on the
+// Pi just to read a d-pad. Menu nav feels identical.
+setInterval(pollPads, 50);
 addEventListener("gamepadconnected", () => showToast("CONTROLLER CONNECTED"));
 
 /* ---------- boot ---------- */
-addEventListener("resize", () => { drawClock(true); buildMenu(); });
+addEventListener("resize", () => {
+  drawClock(true);
+  buildMenu();
+  if (music.title) mTitle.innerHTML = titleDots(music.title);  // dot size is viewport-derived
+});
 drawClock(true);
 loadWeather();
 loadApps();
-pollPads();
+pollMusic();
+musicLoop();
 </script>
 </body>
 </html>

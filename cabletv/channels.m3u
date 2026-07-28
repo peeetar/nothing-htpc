@@ -2,7 +2,9 @@
 # nothing-htpc curated cable lineup.
 # Format: tvg-chno = the channel number on your "cable box".
 # Numbers are stable — add channels at any free number, gaps are fine.
-# 991-993 are reserved for teletext (defined in cabletv.lua).
+# 990-999 are reserved for teletext (defined in cabletv.lua):
+#   991 NEWS (MK / SKG)  992 WEATHER   993 MOVIES   994 TV SHOWS   999 GUIDE
+#   995-998 are free.  993/994 read cabletv/library.tsv, not this file.
 #
 # Sources: iptv-org (github.com/iptv-org/iptv), publicly available streams.
 # [Geo] = geo-blocked to MK — works from home, not from elsewhere.

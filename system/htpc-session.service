@@ -7,7 +7,8 @@ Conflicts=getty@tty1.service
 [Service]
 # IMPORTANT: User below must be the login user that exists on this
 # machine, and the number in XDG_RUNTIME_DIR must match `id <user>`.
-# A mismatch crash-loops with status=217/USER.
+# A mismatch crash-loops with status=217/USER. On Raspberry Pi OS the
+# first user you create is uid 1000 as well, whatever you named it.
 User=petar
 PAMName=login
 TTYPath=/dev/tty1
@@ -17,14 +18,28 @@ UtmpIdentifier=tty1
 UtmpMode=user
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 
-# --- VirtualBox testing only: uncomment these two lines ---
-# (forces software rendering; NOT needed on real hardware)
+# On the Pi, cage renders through the vc4 GPU and needs nothing here — but
+# only if dtoverlay=vc4-kms-v3d is active in /boot/firmware/config.txt.
+# Without it there is no DRM device, no /dev/cec0, and this unit restart-loops.
+#
+# --- VM / broken-GPU fallback: uncomment these two lines ---
+# (forces software rendering; NOT needed on the Pi or on real x86 hardware)
 #Environment=WLR_RENDERER=pixman
 #Environment=WLR_NO_HARDWARE_CURSORS=1
 
-ExecStart=/usr/bin/cage -d -- /opt/htpc/system/start-session.sh
+# IMPORTANT: systemd requires an absolute path here, so this is the one place
+# in the project that names the checkout's location. install.sh rewrites this
+# line with the repo it was run from — the box runs the clone in place, it is
+# never copied anywhere. The default below is only right if you cloned into
+# the login user's home; if you write this unit by hand, edit the path.
+ExecStart=/usr/bin/cage -d -- /home/petar/nothing-htpc/system/start-session.sh
 Restart=always
 RestartSec=2
+
+# 1GB of RAM and no swap by default: if something does run away, kill the
+# session and restart it rather than letting the OOM killer pick a victim
+# at random (it usually picks the backend, leaving a dead-but-lit screen).
+OOMPolicy=kill
 
 [Install]
 WantedBy=graphical.target

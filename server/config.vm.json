@@ -1,33 +1,22 @@
 {
+  "_note": "Stand-in apps for testing the launch/kill/home loop on a dev machine or VM, without installing the real clients. Used by system/dev-session.sh --vm via HTPC_CONFIG, so it never overwrites a deployed config.json. Needs: mpv foot htop",
   "weather": {
     "lat": 41.117,
     "lon": 20.802,
-    "_note": "Weather works fine in the VM as long as it has internet."
+    "_note": "Weather works anywhere with internet."
   },
   "apps": [
     {
-      "id": "streaming",
-      "label": "STREAMING",
-      "command": ["jellyfinmediaplayer", "--tv", "--fullscreen"],
-      "_note": "Sign into demo.jellyfin.org/stable for a real test library. If you skip installing it, swap for the mpv line below."
-    },
-    {
-      "id": "livetv",
-      "label": "LIVE TV",
+      "id": "tv",
+      "label": "TV",
       "command": ["mpv", "--fs", "--loop", "av://lavfi:smptebars=size=1280x720:rate=30"],
-      "_note": "SMPTE color bars stand in for a live channel. apt install mpv"
+      "_note": "SMPTE color bars stand in for the whole TV tile — live channels and the on-demand library both live behind it now. Point this at $HTPC_DIR/cabletv/cabletv.sh to test the real thing."
     },
     {
       "id": "music",
       "label": "MUSIC",
       "command": ["mpv", "--fs", "--loop", "av://lavfi:sine=frequency=440", "--force-window"],
-      "_note": "440Hz tone proves audio + launch/kill work. Swap for feishin later."
-    },
-    {
-      "id": "gaming",
-      "label": "GAMING",
-      "command": ["foot", "-F", "sh", "-c", "echo 'pretend this is Steam Big Picture'; sleep 999"],
-      "_note": "Don't install Steam in the VM — pointless without the GPU. apt install foot"
+      "_note": "440Hz tone proves audio + launch/kill work."
     },
     {
       "id": "apps",

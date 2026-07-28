@@ -1,0 +1,20 @@
+# /etc/udev/rules.d/99-htpc-input.rules
+#
+# Let the session's daemons reach the input layer without running as root.
+#
+# uinput is how daemon/cecd.py turns TV-remote CEC presses into real key
+# events. Without this rule it is root-only, cecd logs "cannot open
+# /dev/uinput", and the remote does nothing while everything else still works.
+#
+# The user must also be in the `input` group (see README), and the uinput
+# module must be loaded:  echo uinput | sudo tee /etc/modules-load.d/uinput.conf
+KERNEL=="uinput", SUBSYSTEM=="misc", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
+
+# CEC device, for cecd.py and system/cec-tv.sh.
+KERNEL=="cec[0-9]*", SUBSYSTEM=="cec", MODE="0660", GROUP="video"
+
+# --- x86 builds only -------------------------------------------------------
+# The Pi has no S3 suspend, so there is nothing to wake it from and no
+# equivalent of this rule is needed. Kept for anyone running the tower build:
+# it lets an 8BitDo 2.4GHz dongle wake the machine (vendor 2dc8).
+#ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="2dc8", ATTR{power/wakeup}="enabled"

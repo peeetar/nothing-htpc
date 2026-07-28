@@ -5,8 +5,13 @@ Home-button daemon.
 Watches all gamepads for the guide/home button (BTN_MODE).
 HOLD for 0.7s  -> POST /home to the launcher backend, which kills
                   the foreground app and drops back to the launcher.
-Short press    -> ignored, so Steam Big Picture keeps its normal
-                  guide-button behavior.
+Short press    -> ignored. A guide button is easy to brush against,
+                  and this one kills whatever you are watching; the
+                  hold makes it deliberate. Apps that use the guide
+                  button themselves also keep working.
+
+The TV remote's Exit key does the same job via daemon/cecd.py, so
+the controller is optional.
 
 Requires: python3-evdev, and the user in the `input` group
 (or run as a system service).

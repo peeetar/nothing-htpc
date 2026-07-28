@@ -1,0 +1,9 @@
+
+CLAUDE.md
+__pycache__/
+*.pyc
+
+# Per-box config. The repo is run in place, so this is how local decisions
+# (coordinates, app choices) survive a git pull. server.py prefers it over
+# server/config.json when it exists.
+server/config.local.json
