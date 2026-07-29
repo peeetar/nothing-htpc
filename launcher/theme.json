@@ -54,6 +54,17 @@
       "_note": "Hairlines only. This UI has no borders thicker than a rule and no radii — a rounded card is the single fastest way to make it look like a streaming app.",
       "hair": "1px",
       "radius": "0"
+    },
+
+    "glow": {
+      "_note": "Selection is a white glow, not a coloured edge. A red bar under the selected poster read as a progress indicator and fought with the artwork; light coming off the card reads as focus and works over any poster. The red accent is spent on the one dot that marks state, nowhere else.",
+      "card": "0 0 2.4vh rgba(255,255,255,0.42)",
+      "card-tight": "0 0 0.6vh rgba(255,255,255,0.30)"
+    },
+
+    "fade": {
+      "_note": "Edge masks, as a percentage of the element's width. The news marquee fades out before it reaches its category label rather than sliding under it — 3% is enough to read as a fade and not as a cut.",
+      "edge": "3%"
     }
   },
 
@@ -68,6 +79,9 @@
     "dot-stagger": 14,
     "dot-assemble": 420,
     "marquee-px-per-s": 42,
+    "grid-scroll": 320,
+    "review-hold": 7000,
+    "review-fade": 700,
     "ease": "cubic-bezier(.2,.9,.3,1)",
     "ease-out": "ease",
     "breathe": 4000
@@ -80,9 +94,13 @@
     "grid-columns": 6,
     "grid-gap": "1.4vw",
     "poster-aspect": "2 / 3",
-    "_note-posters": "Two rows' worth. This is a memory budget as much as a layout one — every card is a real image decode, and on the Pi profile it drops to one row of four.",
-    "posters-in-flight": 12,
+    "_note-posters": "A page is `grid-rows-per-page` rows deep; the viewport shows however many fit (two, at 1080p with six columns) and scrolls through the rest. Reaching the bottom of a page turns to the next one. This is a memory budget as much as a layout one — every card is a real image decode.",
+    "grid-rows-per-page": 5,
+    "posters-in-flight": 30,
+    "grid-offset": "10px",
     "detail-poster-width": "26vw",
+    "detail-reviews": 3,
+    "detail-cast": 5,
     "clock-dot-scale": 0.0145,
     "menu-dot-scale": 0.0018,
     "menu-gap": "2.2vw",
@@ -147,7 +165,20 @@
     },
     "weather": {
       "today": "TODAY",
-      "feels": "FEELS LIKE"
+      "feels": "FEELS LIKE",
+      "now": "NOW",
+      "wind": "WIND",
+      "rain": "RAIN",
+      "sun": "SUN"
+    },
+    "detail": {
+      "director": "DIRECTOR",
+      "producer": "PRODUCER",
+      "writer": "WRITER",
+      "cast": "CAST",
+      "reviews": "REVIEWS",
+      "no-reviews": "NO REVIEWS",
+      "page": "PAGE"
     }
   },
 
@@ -162,8 +193,10 @@
       },
       "layout": {
         "grid-columns": 4,
-        "posters-in-flight": 8,
-        "news-rows-top": 2
+        "grid-rows-per-page": 4,
+        "posters-in-flight": 16,
+        "news-rows-top": 2,
+        "detail-reviews": 2
       }
     }
   }

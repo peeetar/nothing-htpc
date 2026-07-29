@@ -79,7 +79,37 @@ const GLYPHS = {
   "/":["00001","00010","00010","00100","01000","01000","10000"],
   "+":["00000","00100","00100","11111","00100","00100","00000"],
   "*":["00000","10101","01110","11111","01110","10101","00000"],
+  // Review ratings are drawn as stars in the same matrix as everything else.
+  // Filled and hollow have to be legible at four or five pixels a dot, which
+  // is why the hollow one is a ring and not a thin outline of the filled one.
+  // Review ratings are drawn as stars in the same matrix as everything else.
+  // There is no hollow variant: at four pixels a dot an outline reads as
+  // noise, so an unearned star is the same glyph in --faint. Colour carries
+  // the distinction, shape does not have to.
+  // An eight-point sparkle, not a five-point star: five points need an
+  // asymmetric silhouette that a 5-wide matrix cannot hold, and every attempt
+  // read as a cross or a blob. This one is symmetric, so it survives being
+  // four pixels tall and still says "star".
+  "★":["00100","10101","01110","11111","01110","10101","00100"],
 };
+
+/* Is every character in this string something the dot face can draw?
+   The display matrix is Latin-only by design, and the content here is
+   Macedonian Cyrillic and Greek — so a Greek heading handed to dotSVG comes
+   out as a row of blank spaces, which is exactly how the bottom half of the
+   news screen lost its source name. Anything that might not be Latin has to
+   go through heading() instead. */
+function dottable(text) {
+  return [...String(text).toUpperCase()].every(c => GLYPHS[c] !== undefined);
+}
+
+/* A heading in the dot face when it can be, in the body font when it cannot.
+   Same visual weight either way; the fallback is what keeps Cyrillic and
+   Greek legible instead of silently blank. */
+function heading(text, dotPx, opts = {}) {
+  if (dottable(text)) return dotSVG(text, dotPx, opts);
+  return `<span class="headingtext">${escapeHTML(text)}</span>`;
+}
 
 const DOT_STEP = 1.55;          // dotPx -> advance per dot, incl. the 0.55 gap
 export function dotSVG(text, dotPx, opts = {}) {
@@ -290,34 +320,60 @@ async function weatherEnter() {
   const days = THEME.layout["weather-days"] || 3;
 
   const rows = await Promise.all(WX_CITIES.map(async (city) => {
-    let daily;
+    let daily, now;
     if (FIXTURES) {
       daily = { time: ["", "", ""], weather_code: [0, 3, 61],
-                temperature_2m_max: [31, 28, 22], temperature_2m_min: [18, 17, 15] };
+                temperature_2m_max: [31, 28, 22], temperature_2m_min: [18, 17, 15],
+                precipitation_probability_max: [0, 20, 80] };
+      now = { temperature_2m: 27, weather_code: 0, wind_speed_10m: 11, apparent_temperature: 29 };
     } else {
       try {
         const j = await fetch(
           `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
-          `&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=${days}&timezone=auto`,
+          `&current=temperature_2m,weather_code,wind_speed_10m,apparent_temperature` +
+          `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+          `&forecast_days=${days}&timezone=auto`,
           { signal: AbortSignal.timeout(6000) }).then(r => r.json());
         daily = j.daily;
-      } catch (_) { return `<div class="wxcity"><div class="wxname">${city.name}</div>
-        <div class="wxdays"><div class="wxday"><span class="when">${copy("state.offline")}</span></div></div></div>`; }
+        now = j.current;
+      } catch (_) {
+        return `<div class="wxcity"><div class="wxlead"><div class="wxname">${city.name}</div>
+          <div class="wxnow"><span class="cond">${copy("state.offline")}</span></div></div></div>`;
+      }
     }
+
     const cells = [];
     for (let i = 0; i < days; i++) {
       const when = i === 0 ? copy("weather.today")
         : (daily.time[i] ? DAYS[new Date(daily.time[i]).getDay()].slice(0, 3) : `+${i}`);
+      const rain = daily.precipitation_probability_max?.[i] ?? null;
       cells.push(`<div class="wxday">
         <span class="icon">${WX_ICON[wxKind(daily.weather_code[i])]}</span>
         <span>
           <div class="when">${when}</div>
           <div class="temps">${Math.round(daily.temperature_2m_max[i])}°
             <span class="lo">${Math.round(daily.temperature_2m_min[i])}°</span></div>
+          ${rain !== null && rain > 0 ? `<div class="rain">${rain}%</div>` : ""}
         </span></div>`);
     }
-    return `<div class="wxcity"><div class="wxname">${city.name}</div>
-              <div class="wxdays">${cells.join("")}</div></div>`;
+
+    // What the screen was missing: now. Three days of forecast with no
+    // current reading is an almanac, not a weather channel. The current
+    // temperature gets the dot-matrix face — it is the number you came for.
+    const nowBlock = `
+      <div class="wxnow">
+        <span class="big">${dotSVG(`${Math.round(now.temperature_2m)}°`, 4.2, { assemble: true })}</span>
+        <span class="cond">${WMO[now.weather_code] || ""}</span>
+      </div>
+      <div class="wxextra">
+        <span><b>${copy("weather.feels")}</b> ${Math.round(now.apparent_temperature)}°</span>
+        <span><b>${copy("weather.wind")}</b> ${Math.round(now.wind_speed_10m)}</span>
+      </div>`;
+
+    return `<div class="wxcity">
+              <div class="wxlead"><div class="wxname">${city.name}</div>${nowBlock}</div>
+              <div class="wxdays">${cells.join("")}</div>
+            </div>`;
   }));
 
   grid.innerHTML = rows.join("");
@@ -353,9 +409,14 @@ const FIXTURE_HEADLINES = [
    and a short row scroll at the same speed rather than the same duration. */
 function marqueeRow(label, items) {
   const inner = items.map(t => `<span class="item">${escapeHTML(t)}</span>`).join("");
+  /* The label and the headlines are siblings in separate boxes, not layers.
+     The headlines' box clips them, so a headline scrolling left stops existing
+     at the label's edge instead of sliding out past it. */
   return `<div class="catrow">
             <span class="cat">${label}</span>
-            <span class="track" data-count="${items.length}">${inner}${inner}</span>
+            <span class="marquee">
+              <span class="track" data-count="${items.length}">${inner}${inner}</span>
+            </span>
           </div>`;
 }
 function escapeHTML(s) {
@@ -387,8 +448,9 @@ async function newsEnter() {
   const bottom = document.getElementById("newsbottom");
   const nTop = THEME.layout["news-rows-top"] || 4;
 
+  // heading(), not dotSVG(): the Greek source name has no dot glyphs.
   const head = (name, region) =>
-    `<div class="sourcehead"><span class="name">${dotSVG(name, 5, { charGap: 1.2 })}</span>` +
+    `<div class="sourcehead"><span class="name">${heading(name, 5, { charGap: 1.2 })}</span>` +
     (region ? `<span class="region">${region}</span>` : "") + `</div>`;
 
   top.innerHTML = head(copy("news.top-source"), "");
@@ -530,86 +592,353 @@ async function tvStop() {
    Catalogue comes from the backend's Stremio-shaped client (Cinemeta);
    pressing OK resolves a stream and hands it to mpv.
    ========================================================= */
-const FIXTURE_LIBRARY = [
-  { title: "Dune: Part Two", year: "2024", runtime: 166, rating: "8.5", poster: "", plot: "Paul Atreides unites with the Fremen to wage war against House Harkonnen." },
-  { title: "Poor Things", year: "2023", runtime: 141, rating: "8.0", poster: "", plot: "A young woman brought back to life by an unorthodox scientist runs away with a lawyer." },
-  { title: "Oppenheimer", year: "2023", runtime: 180, rating: "8.4", poster: "", plot: "The story of the American scientist who helped develop the atomic bomb." },
-  { title: "The Zone of Interest", year: "2023", runtime: 105, rating: "7.4", poster: "", plot: "The commandant of Auschwitz and his wife build a life beside the camp wall." },
-  { title: "Anatomy of a Fall", year: "2023", runtime: 152, rating: "7.7", poster: "", plot: "A woman is suspected of her husband's death; their blind son faces a moral dilemma." },
-  { title: "Past Lives", year: "2023", runtime: 105, rating: "7.8", poster: "", plot: "Two childhood friends reunite in New York two decades after being separated." },
-  { title: "Killers of the Flower Moon", year: "2023", runtime: 206, rating: "7.6", poster: "", plot: "Members of the Osage tribe are murdered under mysterious circumstances." },
-  { title: "The Holdovers", year: "2023", runtime: 133, rating: "7.9", poster: "", plot: "A teacher remains at a New England prep school over the winter holidays." },
-  { title: "Fallen Leaves", year: "2023", runtime: 81, rating: "7.4", poster: "", plot: "Two lonely people meet by chance in the Helsinki night." },
-  { title: "Perfect Days", year: "2023", runtime: 124, rating: "7.9", poster: "", plot: "A Tokyo toilet cleaner finds beauty in his structured daily routine." },
-  { title: "May December", year: "2023", runtime: 117, rating: "6.7", poster: "", plot: "An actress studies the woman she will portray in a film about a scandal." },
-  { title: "Godzilla Minus One", year: "2023", runtime: 125, rating: "7.7", poster: "", plot: "Postwar Japan faces a new devastation in the form of a giant monster." },
+/* Enough fixture titles to span more than one page, so the paging and the
+   in-page scroll are both exercised without a backend. */
+const FIXTURE_LIBRARY = `Dune: Part Two|2024|166|8.5|Paul Atreides unites with the Fremen to wage war against House Harkonnen.
+Poor Things|2023|141|8.0|A young woman brought back to life by an unorthodox scientist runs away with a lawyer.
+Oppenheimer|2023|180|8.4|The story of the American scientist who helped develop the atomic bomb.
+The Zone of Interest|2023|105|7.4|The commandant of Auschwitz and his wife build a life beside the camp wall.
+Anatomy of a Fall|2023|152|7.7|A woman is suspected of her husband's death; their blind son faces a moral dilemma.
+Past Lives|2023|105|7.8|Two childhood friends reunite in New York two decades after being separated.
+Killers of the Flower Moon|2023|206|7.6|Members of the Osage tribe are murdered under mysterious circumstances.
+The Holdovers|2023|133|7.9|A teacher remains at a New England prep school over the winter holidays.
+Fallen Leaves|2023|81|7.4|Two lonely people meet by chance in the Helsinki night.
+Perfect Days|2023|124|7.9|A Tokyo toilet cleaner finds beauty in his structured daily routine.
+May December|2023|117|6.7|An actress studies the woman she will portray in a film about a scandal.
+Godzilla Minus One|2023|125|7.7|Postwar Japan faces a new devastation in the form of a giant monster.
+The Brutalist|2024|215|8.0|An architect flees postwar Europe to rebuild his life and his practice.
+Nickel Boys|2024|140|7.5|Two boys endure a reform school in Jim Crow-era Florida.
+Flow|2024|85|7.9|A cat survives a flood aboard a boat with other animals.
+Conclave|2024|120|7.4|A cardinal runs the secretive election of a new pope.
+The Substance|2024|141|7.3|A fading star takes a black-market drug that generates a younger self.
+Challengers|2024|131|7.1|Three tennis players' lives intertwine over years of matches.
+La Chimera|2023|130|7.0|A British archaeologist joins a band of Italian grave robbers.
+Evil Does Not Exist|2023|106|7.3|A village confronts a glamping development in the woods above it.
+All of Us Strangers|2023|105|7.6|A screenwriter meets a neighbour and returns to his childhood home.
+Society of the Snow|2023|144|7.8|Survivors of a plane crash in the Andes fight to stay alive.
+The Boy and the Heron|2023|124|7.4|A boy enters a fantastical world after losing his mother.
+Monster|2023|126|7.9|A single mother, a teacher and a boy tell the same story differently.
+Robot Dreams|2023|102|7.6|A dog builds a robot companion in 1980s Manhattan.
+The Taste of Things|2023|135|7.1|A cook and a gourmet share thirty years of meals.
+Green Border|2023|147|7.5|Migrants are pushed back and forth across a forest frontier.
+Do Not Expect Too Much|2023|163|7.0|A production assistant drives across Bucharest for a safety video.
+Close Your Eyes|2023|169|7.2|A director confronts an unfinished film and a vanished actor.
+The Beast|2023|146|6.8|Lovers meet across three centuries and one purification of feeling.
+Dahomey|2024|68|6.9|Twenty-six royal treasures return from Paris to Benin.
+Hard Truths|2024|97|7.1|A woman's fury with the world strains her family.
+Grand Tour|2024|129|6.6|A colonial officer flees his fiancée across Asia in 1918.
+Caught by the Tides|2024|111|6.7|Two decades of a woman's life traced through a changing China.
+Universal Language|2024|89|7.4|Strangers in a Winnipeg reimagined as an Iranian city cross paths.
+Anora|2024|139|7.5|A Brooklyn sex worker marries the son of a Russian oligarch.`
+  .split("\n").map((line, i) => {
+    const [title, year, runtime, rating, plot] = line.split("|");
+    return { id: `fixture${i}`, title, year, runtime: +runtime, rating, plot, poster: "" };
+  });
+
+const FIXTURE_CREDITS = {
+  director: ["Denis Villeneuve"],
+  producer: ["Mary Parent", "Cale Boyter"],
+  writer: ["Jon Spaihts", "Frank Herbert"],
+  cast: ["Timothée Chalamet", "Zendaya", "Rebecca Ferguson", "Javier Bardem", "Josh Brolin"],
+};
+const FIXTURE_REVIEWS = [
+  { author: "cinemabuff", rating: 9,
+    text: "A rare sequel that widens rather than repeats. The sound design does as much narrative work as the script, and the desert is photographed as a character rather than a backdrop." },
+  { author: "marisol_v", rating: 7,
+    text: "Visually overwhelming and emotionally cool. I admired almost every frame and felt held at arm's length by all of them, which may well be the point." },
+  { author: "j_okafor", rating: 10,
+    text: "The best argument for seeing films in a cinema that I have had in a decade. Everything is scaled to overwhelm, and it earns the scale." },
 ];
 
-const gridState = { kind: "movie", items: [], sel: 0, detail: false, loaded: {} };
+const gridState = {
+  kind: "movie",
+  items: [],           // everything loaded so far, across pages
+  page: 0,
+  sel: 0,              // index into `items`, not into the page
+  topRow: 0,           // first row visible inside the viewport
+  detail: false,
+  busy: false,
+  exhausted: false,
+  loaded: {},
+};
+
+function perPage() {
+  return (THEME.layout["grid-columns"] || 6) * (THEME.layout["grid-rows-per-page"] || 5);
+}
+
+/* Fetch until we have at least `upto` items, or upstream runs out. Cinemeta
+   pages with `skip`, and a page that comes back empty (or repeats what we
+   already have) is the end of the catalogue. */
+async function ensureLoaded(upto) {
+  if (FIXTURES || gridState.exhausted || gridState.busy) return;
+  if (gridState.items.length >= upto) return;
+  gridState.busy = true;
+  try {
+    while (gridState.items.length < upto && !gridState.exhausted) {
+      const skip = gridState.items.length;
+      const batch = await fetch(`${BACKEND}/catalog/${gridState.kind}?skip=${skip}`,
+        { signal: AbortSignal.timeout(10000) }).then(r => r.json());
+      if (!Array.isArray(batch) || !batch.length) { gridState.exhausted = true; break; }
+      const seen = new Set(gridState.items.map(i => i.id));
+      const fresh = batch.filter(i => !seen.has(i.id));
+      if (!fresh.length) { gridState.exhausted = true; break; }
+      gridState.items.push(...fresh);
+    }
+  } catch (_) {
+    showToast(copy("state.offline"));
+    gridState.exhausted = true;
+  } finally {
+    gridState.busy = false;
+  }
+}
 
 async function gridEnter() {
   document.getElementById("gridtitle").innerHTML =
     dotSVG(copy(gridState.kind === "movie" ? "tiles.movies" : "tiles.shows"), 6, { assemble: true });
-  if (gridState.loaded[gridState.kind]) { renderGrid(); return; }
 
-  if (FIXTURES) gridState.items = FIXTURE_LIBRARY;
-  else {
-    try {
-      gridState.items = await fetch(`${BACKEND}/catalog/${gridState.kind}`,
-        { signal: AbortSignal.timeout(8000) }).then(r => r.json());
-    } catch (_) { gridState.items = []; showToast(copy("state.offline")); }
+  if (!gridState.loaded[gridState.kind]) {
+    gridState.items = FIXTURES ? FIXTURE_LIBRARY.slice() : [];
+    gridState.page = 0; gridState.sel = 0; gridState.topRow = 0;
+    gridState.exhausted = FIXTURES;
+    await ensureLoaded(perPage());
+    gridState.loaded[gridState.kind] = true;
   }
-  gridState.loaded[gridState.kind] = true;
-  gridState.sel = 0;
   renderGrid();
 }
 
-function renderGrid() {
-  const el = document.getElementById("grid");
-  const cap = THEME.layout["posters-in-flight"] || 24;
-  const items = gridState.items.slice(0, cap);
-  document.getElementById("gridcount").textContent =
-    gridState.items.length ? `${gridState.items.length}` : copy("state.empty");
+/* Rows are measured, not assumed: the card height comes from the poster
+   aspect ratio against a column width that is a fraction of the viewport, so
+   only the browser knows what it worked out to. */
+function rowMetrics() {
+  const inner = document.getElementById("gridinner");
+  const card = inner.querySelector(".card");
+  if (!card) return { row: 0, visible: 1 };
+  const gap = parseFloat(getComputedStyle(inner).rowGap) || 0;
+  const row = card.getBoundingClientRect().height + gap;
+  const box = document.getElementById("grid").clientHeight;
+  return { row, visible: Math.max(1, Math.floor((box + gap) / row)) };
+}
 
-  el.innerHTML = items.map((it, i) => `
-    <div class="card${i === gridState.sel ? " sel" : ""}" data-i="${i}">
+function renderGrid() {
+  const inner = document.getElementById("gridinner");
+  const cols = THEME.layout["grid-columns"] || 6;
+  const size = perPage();
+  const start = gridState.page * size;
+  const items = gridState.items.slice(start, start + size);
+
+  document.getElementById("gridcount").textContent =
+    gridState.items.length ? String(gridState.items.length) : copy("state.empty");
+  const pages = Math.max(1, Math.ceil(gridState.items.length / size));
+  document.getElementById("gridpage").textContent =
+    pages > 1 ? `${copy("detail.page")} ${gridState.page + 1}/${gridState.exhausted ? pages : "·"}` : "";
+
+  inner.innerHTML = items.map((it, i) => `
+    <div class="card${start + i === gridState.sel ? " sel" : ""}" data-i="${start + i}">
       ${it.poster ? `<img src="${escapeHTML(it.poster)}" alt="" loading="lazy">` : ""}
       <div class="stub"><span>${escapeHTML(it.title)}</span>${it.year ? `<span class="y">${escapeHTML(it.year)}</span>` : ""}</div>
     </div>`).join("");
 
-  el.querySelectorAll(".card").forEach(c =>
+  inner.querySelectorAll(".card").forEach(c =>
     c.addEventListener("click", () => { gridState.sel = +c.dataset.i; renderGrid(); openDetail(); }));
+
+  // Keep the cursor's row inside the viewport, then slide the grid to match.
+  const { row, visible } = rowMetrics();
+  const cursorRow = Math.floor((gridState.sel - start) / cols);
+  if (cursorRow < gridState.topRow) gridState.topRow = cursorRow;
+  const lastRow = Math.max(0, Math.ceil(items.length / cols) - 1);
+  if (cursorRow > gridState.topRow + visible - 1) gridState.topRow = cursorRow - visible + 1;
+  gridState.topRow = Math.max(0, Math.min(gridState.topRow, Math.max(0, lastRow - visible + 1)));
+  inner.style.transform = `translateY(${-gridState.topRow * row}px)`;
 }
 
-function gridMove(dx, dy) {
+async function gridMove(dx, dy) {
   const cols = THEME.layout["grid-columns"] || 6;
-  const cap = Math.min(gridState.items.length, THEME.layout["posters-in-flight"] || 24);
-  if (!cap) return;
-  let n = gridState.sel + dx + dy * cols;
-  if (n < 0 || n >= cap) return;
-  gridState.sel = n;
-  renderGrid();
+  const size = perPage();
+  if (!gridState.items.length) return;
+
+  const start = gridState.page * size;
+  const inPage = gridState.sel - start;
+
+  if (dx) {
+    const n = inPage + dx;
+    // Left/right stays inside the page: a horizontal move that turned a page
+    // would make the last card of a row jump the cursor somewhere unrelated.
+    if (n < 0 || n >= Math.min(size, gridState.items.length - start)) return;
+    gridState.sel = start + n;
+    renderGrid();
+    return;
+  }
+
+  if (dy > 0) {
+    const n = inPage + cols;
+    if (n < Math.min(size, gridState.items.length - start)) {
+      gridState.sel = start + n;
+      renderGrid();
+      return;
+    }
+    // Past the bottom of the page — turn to the next one, loading if needed.
+    await ensureLoaded((gridState.page + 2) * size);
+    if (gridState.items.length <= start + size) return;      // no next page
+    gridState.page += 1;
+    gridState.topRow = 0;
+    gridState.sel = Math.min(gridState.page * size + (inPage % cols),
+                             gridState.items.length - 1);
+    renderGrid();
+    return;
+  }
+
+  if (dy < 0) {
+    const n = inPage - cols;
+    if (n >= 0) {
+      gridState.sel = start + n;
+      renderGrid();
+      return;
+    }
+    if (gridState.page === 0) return;
+    gridState.page -= 1;
+    const prevStart = gridState.page * size;
+    // Land on the same column in the last row of the previous page, and show
+    // that row rather than snapping the viewport back to the top.
+    const rows = Math.ceil(size / cols);
+    gridState.sel = Math.min(prevStart + (rows - 1) * cols + (inPage % cols),
+                             prevStart + size - 1);
+    gridState.topRow = rows;      // renderGrid clamps this into range
+    renderGrid();
+  }
 }
 
-function openDetail() {
+/* Stars as dots. A 0-10 score becomes five glyphs, so a rating reads at a
+   glance from the sofa instead of being a number to parse. */
+function starDots(outOf10, dotPx = 4.4) {
+  const filled = Math.max(0, Math.min(5, Math.round((Number(outOf10) || 0) / 2)));
+  const on = "★".repeat(filled), off = "★".repeat(5 - filled);
+  return (on ? dotSVG(on, dotPx, { charGap: 0.9 }) : "") +
+         (off ? dotSVG(off, dotPx, { charGap: 0.9, color: "var(--faint)" }) : "");
+}
+
+const reviews = { list: [], i: 0, timer: null };
+
+function stopReviews() {
+  clearTimeout(reviews.timer);
+  reviews.timer = null;
+}
+
+/* One review at a time, held then cross-faded. Same idea as the news
+   marquee — the panel is not tall enough for three reviews, but it is tall
+   enough for three reviews one after another. */
+function cycleReviews() {
+  stopReviews();
+  if (reviews.list.length < 2) return;
+  reviews.timer = setTimeout(() => {
+    reviews.i = (reviews.i + 1) % reviews.list.length;
+    showReview();
+    cycleReviews();
+  }, THEME.motion["review-hold"] || 7000);
+}
+
+function showReview() {
+  const stack = document.getElementById("rstack");
+  [...stack.children].forEach((el, i) => el.classList.toggle("on", i === reviews.i));
+  document.getElementById("rdots").innerHTML =
+    reviews.list.map((_, i) => `<i class="${i === reviews.i ? "on" : ""}"></i>`).join("");
+}
+
+function renderReviews(list) {
+  const box = document.getElementById("dreviews");
+  const stack = document.getElementById("rstack");
+  reviews.list = list || [];
+  reviews.i = 0;
+
+  if (!reviews.list.length) {
+    // No key, or a film nobody has written about. The section disappears
+    // rather than showing an empty frame with a heading over it.
+    box.style.display = "none";
+    stack.innerHTML = "";
+    stopReviews();
+    return;
+  }
+  box.style.display = "flex";
+  document.getElementById("rlabel").textContent = copy("detail.reviews");
+  stack.innerHTML = reviews.list.map(r => `
+    <div class="review">
+      <div class="rtop">
+        <span class="rstars">${starDots(r.rating)}</span>
+        <span class="rauthor">${escapeHTML(r.author || "")}</span>
+      </div>
+      <div class="rbody">${escapeHTML(r.text || "")}</div>
+    </div>`).join("");
+  showReview();
+  cycleReviews();
+}
+
+function renderCredits(c) {
+  const el = document.getElementById("dcredits");
+  const rows = [];
+  const line = (role, names) => {
+    if (!names || !names.length) return;
+    const n = names.slice(0, role === "cast" ? (THEME.layout["detail-cast"] || 5) : 3);
+    rows.push(`<div class="row"><span class="role">${copy("detail." + role)}</span>` +
+              `<span class="who">${escapeHTML(n.join(", "))}</span></div>`);
+  };
+  line("director", c.director);
+  line("producer", c.producer);
+  line("writer", c.writer);
+  line("cast", c.cast);
+  el.innerHTML = rows.join("");
+}
+
+async function openDetail() {
   const it = gridState.items[gridState.sel];
   if (!it) return;
   gridState.detail = true;
   document.getElementById("dposter").innerHTML =
     it.poster ? `<img src="${escapeHTML(it.poster)}" alt="">` : "";
+  // A film title can be in any script — heading() falls back to the body font
+  // rather than drawing a row of blanks.
   const w = innerWidth * 0.5;
   document.getElementById("dtitle").innerHTML =
-    dotSVG(it.title, fitDots(it.title, w, { max: 9 }), { assemble: true });
+    heading(it.title, fitDots(it.title, w, { max: 9 }), { assemble: true });
   const meta = [];
   if (it.year) meta.push(escapeHTML(it.year));
   if (it.runtime) meta.push(`${Math.floor(it.runtime / 60)}H ${it.runtime % 60}M`);
   if (it.rating) meta.push(`<span class="rating">★ ${escapeHTML(it.rating)}</span>`);
   document.getElementById("dmeta").innerHTML = meta.map(m => `<span>${m}</span>`).join("");
   document.getElementById("dplot").textContent = it.plot || "";
+
+  // Draw what the grid already knows, then fill in credits and reviews when
+  // they arrive. The panel must never wait on the network to appear — a
+  // detail screen that opens half a second after Ⓐ feels broken.
+  renderCredits(it.credits || {});
+  renderReviews(it.reviews || []);
   document.getElementById("detail").classList.add("on");
+
+  if (FIXTURES) {
+    renderCredits(FIXTURE_CREDITS);
+    renderReviews(FIXTURE_REVIEWS.slice(0, THEME.layout["detail-reviews"] || 3));
+    return;
+  }
+  if (it.credits) return;                       // already enriched
+  try {
+    const full = await fetch(`${BACKEND}/meta/${gridState.kind}/${it.id}`,
+      { signal: AbortSignal.timeout(9000) }).then(r => r.json());
+    Object.assign(it, {
+      plot: full.plot || it.plot,
+      runtime: full.runtime || it.runtime,
+      credits: full.credits || {},
+      reviews: (full.reviews || []).slice(0, THEME.layout["detail-reviews"] || 3),
+    });
+    // The cursor may have moved on while this was in flight.
+    if (gridState.detail && gridState.items[gridState.sel] === it) {
+      document.getElementById("dplot").textContent = it.plot || "";
+      renderCredits(it.credits);
+      renderReviews(it.reviews);
+    }
+  } catch (_) { /* keep what the grid gave us */ }
 }
+
 function closeDetail() {
   gridState.detail = false;
+  stopReviews();
   document.getElementById("detail").classList.remove("on");
 }
 
@@ -947,6 +1276,22 @@ async function boot() {
     if (i >= 0) sel = i;
     refreshSel();
     showView(want);
+
+    // &sel=N puts the grid cursor on an item and &detail=1 opens its panel,
+    // so a scrolled grid and the detail screen are both reachable without a
+    // gamepad. Navigation only — neither invents data.
+    if (want === "grid") {
+      setTimeout(async () => {
+        if (q.get("sel")) {
+          const n = parseInt(q.get("sel"), 10);
+          await ensureLoaded(n + 1);
+          gridState.sel = Math.min(n, Math.max(0, gridState.items.length - 1));
+          gridState.page = Math.floor(gridState.sel / perPage());
+          renderGrid();
+        }
+        if (q.get("detail")) openDetail();
+      }, 400);
+    }
   }
 }
 boot();

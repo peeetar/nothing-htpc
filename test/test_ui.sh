@@ -86,6 +86,28 @@ has  "poster cards rendered"           'class="card'
 has  "a fixture title"                 "Oppenheimer"
 has  "selection marker"                "card sel"
 has  "year on the card"                'class="y"'
+has  "scrollable inner grid"           'id="gridinner"'
+has  "page indicator"                  "PAGE 1/2"
+has  "selection uses a white glow"     "box-shadow: var(--glow-card)"
+hasnt "no red bar under the selection"  ".card.sel::after"
+
+echo "MOVIES — page 2 (cursor past the last row)"
+dom "&view=grid&kind=movie&sel=32"
+has  "second page rendered"            "PAGE 2/2"
+has  "an item only on page 2"          "Anora"
+
+echo "MOVIE DETAIL"
+dom "&view=grid&kind=movie&detail=1"; shot detail "&view=grid&kind=movie&detail=1"
+has  "detail panel open"               'id="detail" class="on"'
+has  "director line"                   "DIRECTOR"
+has  "producer line"                   "PRODUCER"
+has  "cast line"                       "CAST"
+has  "five cast members"               "Josh Brolin"
+has  "reviews section"                  'id="dreviews"'
+has  "review author"                   "cinemabuff"
+has  "stars drawn in the dot matrix"   'aria-label="★★★★★"'
+has  "first review visible"            'class="review on"'
+has  "review position dots"            'id="rdots"'
 
 echo "TV"
 dom "&view=tv"; shot tv "&view=tv"
@@ -103,6 +125,12 @@ has  "Greek half"                      "ΘΕΣΣΑΛΟΝΙΚΗ"
 has  "Cyrillic headline renders"       "Владата"
 has  "Greek headline renders"          "Ηρακλής"
 has  "marquee track duplicated"        'class="track"'
+# The label and the headlines must be in separate boxes, or a headline
+# scrolling left slides out over the label instead of stopping at it.
+has  "headlines clipped in own box"    'class="marquee"'
+# The Greek source name has no dot glyphs; without the fallback it renders as
+# a row of blanks, which is how the bottom half lost its name once already.
+has  "Greek heading falls back to text" 'class="headingtext"'
 
 echo "WEATHER"
 dom "&view=weather"; shot weather "&view=weather"
@@ -111,6 +139,11 @@ has  "Ljubljana"                       "Ljubljana"
 has  "Thessaloniki in Greek"           "Θεσσαλονίκη"
 has  "drawn icons, not a font"         "<svg"
 has  "three days"                      "TODAY"
+has  "current reading, not just forecast" 'class="wxnow"'
+has  "current temp in dot matrix"      'aria-label="27°"'
+has  "feels-like"                      "FEELS LIKE"
+has  "wind"                            "WIND"
+has  "rain probability"                'class="rain"'
 
 echo "MUSIC"
 dom "&view=music"; shot music "&view=music"

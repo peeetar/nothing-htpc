@@ -33,6 +33,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import tmdb
+
 CINEMETA = os.environ.get("CINEMETA_URL", "https://v3-cinemeta.strem.io").rstrip("/")
 TORRSERVER = os.environ.get("TORRSERVER_URL", "http://127.0.0.1:8090").rstrip("/")
 
@@ -129,6 +131,22 @@ def _meta_row(m):
         "runtime": _minutes(m.get("runtime")),
         "plot": (m.get("description") or "").strip(),
         "genres": m.get("genres") or [],
+        # Cinemeta hands over TMDB's own id, so enriching a title needs no
+        # search step — see server/tmdb.py.
+        "tmdb_id": m.get("moviedb_id") or None,
+    }
+
+
+def _cinemeta_credits(m):
+    """The credits Cinemeta gives away: a director, a writer, three cast.
+
+    This is what the detail screen shows when there is no TMDB key. No
+    producer, because Cinemeta does not carry one.
+    """
+    return {
+        "director": list(m.get("director") or [])[:3],
+        "writer": list(m.get("writer") or [])[:3],
+        "cast": list(m.get("cast") or [])[:5],
     }
 
 
@@ -176,7 +194,22 @@ def meta(kind, imdb_id):
         m = data.get("meta")
         if not m:
             raise StremioError("no metadata for %s" % imdb_id)
-        return _meta_row(m)
+        row = _meta_row(m)
+
+        # Credits from Cinemeta, then overwritten by TMDB's fuller set if a key
+        # is configured. Reviews only ever come from TMDB — Cinemeta has none.
+        row["credits"] = _cinemeta_credits(m)
+        row["reviews"] = []
+        if tmdb.available() and row.get("tmdb_id"):
+            better = tmdb.credits(kind, row["tmdb_id"])
+            if better:
+                # Keep a Cinemeta value where TMDB returned an empty list, so
+                # a partial TMDB reply cannot make the panel worse than the
+                # keyless one.
+                row["credits"] = {k: (better.get(k) or row["credits"].get(k) or [])
+                                  for k in ("director", "producer", "writer", "cast")}
+            row["reviews"] = tmdb.reviews(kind, row["tmdb_id"])
+        return row
 
     return _cached(key, CATALOG_TTL, produce)
 

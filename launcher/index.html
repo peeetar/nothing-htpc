@@ -212,8 +212,22 @@
   .gridhead { display: flex; justify-content: space-between; align-items: baseline; }
   .gridtitle { line-height: 0; }
   .gridcount { letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint); }
+  /* The viewport. A page is grid-rows-per-page rows deep and only the rows
+     that fit are visible; #gridinner slides under this as the cursor moves.
+     grid-offset drops it clear of the title above, because the selected card
+     scales up and was clipping into it. */
   .grid {
     flex: 1;
+    overflow: hidden;
+    margin-top: calc(var(--space-4) + var(--layout-grid-offset));
+    /* The glow on a selected card in the top row would be cut off by the
+       viewport edge, so the inner grid is inset and the padding gives it
+       room to bleed. */
+    padding: 0.8vh 0.5vw;
+    margin-left: -0.5vw;
+    margin-right: -0.5vw;
+  }
+  #gridinner {
     display: grid;
     grid-template-columns: repeat(var(--layout-grid-columns), 1fr);
     /* max-content, not the default auto: the cards carry an aspect-ratio, and
@@ -222,9 +236,8 @@
        below it. Sizing rows to their content is what stops that. */
     grid-auto-rows: max-content;
     gap: var(--layout-grid-gap);
-    margin-top: var(--space-4);
-    overflow: hidden;
     align-content: start;
+    transition: transform var(--motion-grid-scroll) var(--motion-ease);
   }
   .card {
     position: relative;
@@ -235,6 +248,7 @@
     opacity: 0.55;
     transition: opacity var(--motion-quick) var(--motion-ease-out),
                 transform var(--motion-quick) var(--motion-ease-out),
+                box-shadow var(--motion-quick) var(--motion-ease-out),
                 outline-color var(--motion-quick) var(--motion-ease-out);
     overflow: hidden;
   }
@@ -254,14 +268,14 @@
   /* A poster that loaded covers the stub; one that never arrives leaves the
      title readable rather than leaving a grey rectangle. */
   .card img + .stub { display: none; }
+  /* Selection is light coming off the card. The red bar this replaced read as
+     a progress indicator and fought with the poster art underneath it. */
   .card.sel {
     opacity: 1;
     transform: scale(1.04);
     outline-color: var(--ink);
-  }
-  .card.sel::after {
-    content: ""; position: absolute; left: 0; right: 0; bottom: 0;
-    height: 3px; background: var(--red);
+    box-shadow: var(--glow-card);
+    z-index: 2;
   }
 
   /* detail overlay */
@@ -278,6 +292,9 @@
   #dposter {
     width: var(--layout-detail-poster-width);
     aspect-ratio: var(--layout-poster-aspect);
+    /* flex-start, or the default `stretch` overrides the aspect ratio and the
+       poster is drawn to the full height of the panel. */
+    align-self: flex-start;
     flex: none; background: var(--panel);
   }
   #dposter img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -295,6 +312,73 @@
     /* Body copy is the one place the UI is not uppercase: Cyrillic and Greek
        synopses are unreadable in caps at couch distance. */
     text-transform: none;
+  }
+
+  /* credits — one line per role, label left, names right */
+  /* The dot face's fallback for scripts it cannot draw — same role in the
+     hierarchy, body font instead of dots. */
+  .headingtext {
+    letter-spacing: var(--track-label);
+    font-size: var(--size-title);
+    color: var(--ink);
+    text-transform: none;
+  }
+
+  #dcredits { display: flex; flex-direction: column; gap: 0.7em; }
+  #dcredits .row {
+    display: flex; gap: 1.4em;
+    font-size: var(--size-micro); letter-spacing: var(--track-label);
+  }
+  #dcredits .role { width: 9em; flex: none; color: var(--faint); }
+  #dcredits .who { color: var(--dim); text-transform: none; letter-spacing: var(--track-tight); }
+
+  /* reviews — the news marquee's idea turned vertical. One review at a time,
+     held then cross-faded to the next, so three fit in the space of one
+     without anything scrolling under the cursor's feet. */
+  /* Not flex:1 — the reviews block is only as tall as a review needs, and the
+     hints below claim the leftover with margin-top:auto. Giving this the
+     remaining height instead left a review floating at the top of a very
+     tall empty box. */
+  #dreviews { flex: none; display: flex; flex-direction: column; gap: var(--space-2); }
+  #dinfo .hints { margin-top: auto; }
+  #dreviews .rhead {
+    display: flex; align-items: center; gap: 1.2em;
+    font-size: var(--size-micro); letter-spacing: var(--track-label); color: var(--faint);
+  }
+  #dreviews .rdots { display: flex; gap: 0.4em; }
+  #dreviews .rdots i {
+    width: 0.42em; height: 0.42em; border-radius: 50%;
+    background: var(--faint); display: block;
+  }
+  #dreviews .rdots i.on { background: var(--red); }
+  /* The reviews cross-fade, so they are stacked absolutely and the stack
+     needs a height of its own. Four lines plus the star row is what the
+     longest review settles at once the bottom mask has clipped it. */
+  #rstack { position: relative; height: 11em; }
+  .review {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; gap: 0.9em;
+    opacity: 0;
+    transition: opacity var(--motion-review-fade) var(--motion-ease-out);
+    pointer-events: none;
+  }
+  .review.on { opacity: 1; }
+  .review .rtop { display: flex; align-items: center; gap: 1.4em; }
+  /* Two SVGs side by side — earned stars in ink, the rest in faint. */
+  .review .rstars { display: flex; align-items: center; gap: 0.32em; line-height: 0; }
+  .review .rauthor {
+    font-size: var(--size-micro); letter-spacing: var(--track-label); color: var(--dim);
+    text-transform: none;
+  }
+  .review .rbody {
+    font-size: var(--size-small); line-height: 1.75; color: var(--dim);
+    letter-spacing: var(--track-tight); text-transform: none;
+    max-width: 68ch;
+    /* A review is arbitrary length and the panel is not: clamp it and fade
+       the last line out rather than letting it collide with the hints. */
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
   }
 
   /* ---------- NEWS ----------
@@ -316,18 +400,37 @@
   /* Rows share their half evenly rather than stacking at the top — with
      four categories up top and one below, an even split is what keeps the
      midline reading as a split rather than as a gap. */
-  .catrow { flex: 1; display: flex; align-items: center; gap: 1.4em; overflow: hidden; white-space: nowrap; }
+  .catrow { flex: 1; display: flex; align-items: center; overflow: hidden; white-space: nowrap; }
+  /* The label sits above the headlines and is opaque, so a headline scrolling
+     past goes behind it rather than through it. It is a real stacking
+     context, not just a z-index — the marquee is a sibling with its own
+     clipping box, which is what actually stops the text escaping to the left. */
   .catrow .cat {
     flex: none;
+    position: relative;
+    z-index: 2;
+    background: var(--bg);
     padding: 0.5em 1em;
+    margin-left: var(--space-pad-x);
     border: var(--line-hair) solid var(--rule);
     letter-spacing: var(--track-label); font-size: var(--size-micro);
     color: var(--dim);
-    margin-left: var(--space-pad-x);
+  }
+  /* Headlines live in their own overflow box that starts after the label, so
+     they cannot reach it. The mask fades them out over fade-edge of the row's
+     width at both ends instead of cutting them mid-letter. */
+  .catrow .marquee {
+    flex: 1; min-width: 0; overflow: hidden;
+    margin-left: 1.4em;
+    -webkit-mask-image: linear-gradient(to right, transparent 0,
+      #000 var(--fade-edge), #000 calc(100% - var(--fade-edge)), transparent 100%);
+    mask-image: linear-gradient(to right, transparent 0,
+      #000 var(--fade-edge), #000 calc(100% - var(--fade-edge)), transparent 100%);
   }
   .catrow .track {
-    display: flex; gap: 3.5em; flex: none;
+    display: inline-flex; gap: 3.5em;
     animation: marquee linear infinite;
+    will-change: transform;
   }
   .catrow .item {
     letter-spacing: var(--track-tight); font-size: var(--size-small);
@@ -339,13 +442,32 @@
   @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
   /* ---------- WEATHER ---------- */
-  #wxgrid { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: var(--space-5); }
-  .wxcity { display: flex; align-items: center; gap: 3vw; }
+  #wxgrid { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: var(--space-4); }
+  .wxcity {
+    display: flex; align-items: center; gap: 3vw;
+    padding-bottom: var(--space-3);
+  }
+  .wxcity + .wxcity { border-top: var(--line-hair) solid var(--rule); padding-top: var(--space-3); }
+  /* Name and the current reading travel together on the left — what the
+     screen was missing was *now*. Three days of forecast with no current
+     temperature is an almanac, not a weather channel. */
+  .wxlead { width: 26%; flex: none; display: flex; flex-direction: column; gap: 0.7em; }
   .wxname {
-    width: 22%; flex: none;
     letter-spacing: var(--track-label); font-size: var(--size-large); color: var(--ink);
     text-transform: none;
   }
+  .wxnow { display: flex; align-items: flex-end; gap: 1.1em; }
+  /* block, not an inline span: an inline SVG sits on the text baseline and the
+     bottom row of dots gets clipped by the line box. */
+  .wxnow .big { display: block; line-height: 0; }
+  .wxnow .cond {
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--dim);
+  }
+  .wxextra {
+    display: flex; gap: 2em;
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint);
+  }
+  .wxextra b { color: var(--dim); font-weight: 400; }
   .wxdays { display: flex; gap: 3vw; flex: 1; justify-content: space-between; padding-right: 8vw; }
   .wxday { display: flex; align-items: center; gap: 1.1em; }
   .wxday .icon { width: 2.4em; height: 2.4em; flex: none; }
@@ -353,6 +475,9 @@
   .wxday .when { letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint); }
   .wxday .temps { letter-spacing: var(--track-tight); font-size: var(--size-base); color: var(--ink); }
   .wxday .temps .lo { color: var(--dim); }
+  .wxday .rain {
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--red);
+  }
 
   /* ---------- music (unchanged behaviour, themed values) ---------- */
   #mbody { flex: 1; display: flex; align-items: center; gap: 4vw; min-height: 0; }
@@ -442,9 +567,9 @@
   <div id="gridview" class="view opaque">
     <div class="gridhead">
       <div class="gridtitle" id="gridtitle"></div>
-      <div class="gridcount" id="gridcount"></div>
+      <div class="gridcount"><span id="gridpage"></span>&nbsp;&nbsp;<span id="gridcount"></span></div>
     </div>
-    <div class="grid" id="grid"></div>
+    <div class="grid" id="grid"><div id="gridinner"></div></div>
     <div class="hints" id="gridhints"></div>
     <div id="detail">
       <div id="dposter"></div>
@@ -452,6 +577,11 @@
         <div id="dtitle"></div>
         <div id="dmeta"></div>
         <div id="dplot"></div>
+        <div id="dcredits"></div>
+        <div id="dreviews">
+          <div class="rhead"><span id="rlabel"></span><span class="rdots" id="rdots"></span></div>
+          <div id="rstack"></div>
+        </div>
         <div class="hints" id="detailhints"></div>
       </div>
     </div>

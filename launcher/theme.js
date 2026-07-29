@@ -73,6 +73,8 @@ export async function loadTheme(url = "theme.json", profileName = null) {
   stamp(root, "track", t.tokens.track, "track");
   stamp(root, "space", t.tokens.space, "space");
   stamp(root, "line",  t.tokens.line,  "line");
+  stamp(root, "glow",  t.tokens.glow  || {}, "glow");
+  stamp(root, "fade",  t.tokens.fade  || {}, "fade");
   stampMotion(root, t.motion);
 
   /* Layout values are read by JS (grid counts, dot sizes) and by CSS
