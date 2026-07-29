@@ -5,97 +5,105 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>HOME</title>
 <style>
-  :root {
-    --bg: #000000;
-    --ink: #EDEDED;
-    --dim: #6B6B6B;
-    --faint: #2A2A2A;
-    --red: #D71921;
-    --dot-off: rgba(255,255,255,0.045);
-  }
+  /* Every value here comes from theme.json via theme.js. A literal colour,
+     duration or spacing in this stylesheet is a bug: it is a value that a
+     reskin cannot reach. The only literals are structural (0, 50%, 100%). */
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
   body {
     background: var(--bg);
     color: var(--ink);
-    font-family: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-body);
+    font-size: var(--size-base);
     overflow: hidden;
     cursor: none;
     user-select: none;
     -webkit-user-select: none;
   }
+  /* The page is composited over mpv. Where the UI paints nothing, the video
+     shows through — which is why `body` is only opaque on screens that own
+     the whole display. #stage never gets a background of its own. */
+  body.transparent { background: transparent; }
 
-  /* ---------- layout ---------- */
   #stage { height: 100vh; position: relative; }
 
-  /* Views are stacked, not swapped. The incoming one fades up over the
-     outgoing one, which stays fully opaque until the fade finishes — a
-     plain crossfade would dip through black at the halfway point, and
-     the whole point of keeping music in-page is that nothing ever goes
-     black between the launcher and the music screen. */
+  /* Views are stacked, not swapped: the incoming one fades up over an
+     outgoing one that stays fully opaque until the fade ends. A symmetric
+     crossfade dips through black at 50% and defeats the whole point of
+     keeping these screens in one page. (CLAUDE.md constraint 15.) */
   .view {
     position: absolute; inset: 0;
-    padding: 4.5vh 5vw;
+    padding: var(--space-pad-y) var(--space-pad-x);
     display: flex;
     flex-direction: column;
     opacity: 0;
-    transition: opacity 220ms ease;
+    transition: opacity var(--motion-view) var(--motion-ease-out);
   }
   .view.on { opacity: 1; }
   .view.front { z-index: 2; }
+  .view.opaque { background: var(--bg); }
 
-  /* top bar */
-  #topbar {
+  /* ---------- shared furniture ---------- */
+  .topbar {
     display: flex;
     justify-content: space-between;
     align-items: flex-start;
-    letter-spacing: 0.35em;
-    font-size: clamp(11px, 1.2vw, 15px);
+    letter-spacing: var(--track-label);
+    font-size: var(--size-base);
     color: var(--dim);
   }
-  #datewrap { display: flex; align-items: center; gap: 0.9em; }
-  #reddot {
+  .lead { display: flex; align-items: center; gap: 0.9em; }
+  .reddot {
     width: 0.62em; height: 0.62em;
     background: var(--red);
     border-radius: 50%;
     flex: none;
-    animation: breathe 4s ease-in-out infinite;
+    animation: breathe var(--motion-breathe) ease-in-out infinite;
   }
   @keyframes breathe { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
-  #weather { text-align: right; line-height: 1.9; }
-  #weather .temp { color: var(--ink); }
-  #weather .tag { font-size: 0.72em; color: var(--faint); letter-spacing: 0.3em; }
 
-  /* clock */
+  .hints {
+    display: flex;
+    gap: 3.5em;
+    margin-top: var(--space-5);
+    letter-spacing: var(--track-label);
+    font-size: var(--size-micro);
+    color: var(--faint);
+  }
+  .hints b { color: var(--dim); font-weight: 400; }
+
+  /* ---------- home ---------- */
+  #weather-brief { text-align: right; line-height: 1.9; }
+  #weather-brief .temp { color: var(--ink); }
+  #weather-brief .tag { font-size: 0.72em; color: var(--faint); letter-spacing: var(--track-label); }
+
   #clockzone {
     flex: 1;
     display: flex;
     flex-direction: column;
     justify-content: center;
-    gap: 3.2vh;
+    gap: var(--space-4);
   }
   #clock { line-height: 0; }
   #greeting {
-    letter-spacing: 0.45em;
-    font-size: clamp(10px, 1vw, 13px);
+    letter-spacing: var(--track-wide);
+    font-size: var(--size-small);
     color: var(--dim);
   }
 
-  /* menu */
   #menu {
     display: flex;
-    gap: 2.2vw;
+    gap: var(--layout-menu-gap);
     align-items: flex-end;
-    padding-bottom: 1vh;
+    padding-bottom: var(--space-1);
   }
   .tile {
     display: flex;
     flex-direction: column;
-    gap: 1.6vh;
-    padding: 0 0.2vw;
+    gap: var(--space-2);
     opacity: 0.38;
-    transition: opacity 200ms ease, transform 200ms ease;
-    transform: translateY(0);
+    transition: opacity var(--motion-quick) var(--motion-ease-out),
+                transform var(--motion-quick) var(--motion-ease-out);
   }
   .tile .icon { height: clamp(26px, 3vw, 40px); }
   .tile .icon svg {
@@ -104,8 +112,8 @@
     stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
   }
   .tile .label {
-    letter-spacing: 0.32em;
-    font-size: clamp(10px, 1vw, 13px);
+    letter-spacing: var(--track-label);
+    font-size: var(--size-small);
     color: var(--ink);
     white-space: nowrap;
   }
@@ -114,83 +122,250 @@
     width: 0.45em; height: 0.45em;
     border-radius: 50%;
     background: transparent;
-    margin-top: 0.2vh;
   }
-  .tile.sel {
-    opacity: 1;
-    transform: translateY(-1.2vh);
-  }
+  .tile.sel { opacity: 1; transform: translateY(calc(-1 * var(--space-2))); }
   .tile.sel .label { display: none; }
   .tile.sel .dotlabel { display: block; }
   .tile.sel .marker { background: var(--red); }
 
-  /* now-playing strip on the home screen — the music view in one line.
-     Height is always reserved so the menu never shifts when a track starts. */
   #nowplaying {
     display: flex; align-items: center; gap: 0.9em;
     min-height: 2.4em;
-    margin-bottom: 2vh;   /* the selected tile lifts 1.2vh into this row */
-    letter-spacing: 0.3em;
-    font-size: clamp(9px, 0.9vw, 12px);
+    margin-bottom: var(--space-3);
+    letter-spacing: var(--track-label);
+    font-size: var(--size-micro);
     color: var(--dim);
     opacity: 0;
-    transition: opacity 300ms ease;
+    transition: opacity var(--motion-toast) var(--motion-ease-out);
     white-space: nowrap; overflow: hidden;
   }
   #nowplaying.on { opacity: 1; }
-  #nowplaying .npdot {
-    width: 0.5em; height: 0.5em; border-radius: 50%;
-    background: var(--red); flex: none;
-  }
+  #nowplaying .npdot { width: 0.5em; height: 0.5em; border-radius: 50%; background: var(--red); flex: none; }
   #nowplaying .nplabel { color: var(--faint); }
 
-  /* ---------- music view ---------- */
-  #mtop {
-    display: flex; justify-content: space-between; align-items: flex-start;
-    letter-spacing: 0.35em;
-    font-size: clamp(11px, 1.2vw, 15px);
-    color: var(--dim);
+  /* ---------- TV: the channel bar ----------
+     This view paints nothing but the bar — the rest is mpv showing through.
+     A scrim sits under the bar only, because white content behind white
+     type is the one thing that makes it unreadable. */
+  #tvview { padding: 0; }
+  #tvview.view { background: transparent; }
+  #chanbar {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: var(--layout-bar-height);
+    display: flex; align-items: center;
+    gap: 2vw;
+    padding: 0 var(--space-pad-x);
+    background: var(--scrim);
+    border-top: var(--line-hair) solid var(--rule);
+    transform: translateY(100%);
+    transition: transform var(--motion-view) var(--motion-ease);
   }
-  #mtop .mlead { display: flex; align-items: center; gap: 0.9em; }
-  #mtop .mdot {
-    width: 0.62em; height: 0.62em; border-radius: 50%;
-    background: var(--red); flex: none;
-    animation: breathe 4s ease-in-out infinite;
-  }
-  #mstate { color: var(--faint); }
-
-  #mbody {
+  #chanbar.show { transform: translateY(0); }
+  #channum { line-height: 0; flex: none; }
+  #channame {
+    letter-spacing: var(--track-label);
+    font-size: var(--size-large);
+    color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     flex: 1;
-    display: flex; align-items: center; gap: 4vw;
-    min-height: 0;
   }
-  #mart {
-    width: clamp(120px, 24vh, 260px);
-    height: clamp(120px, 24vh, 260px);
+  #chanclock {
+    letter-spacing: var(--track-label);
+    font-size: var(--size-large);
+    color: var(--ink);
     flex: none;
-    line-height: 0;
+    font-variant-numeric: tabular-nums;
   }
+  #chanstate {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    letter-spacing: var(--track-wide);
+    font-size: var(--size-small);
+    color: var(--dim);
+    display: flex; align-items: center; gap: 1.2em;
+    opacity: 0;
+    transition: opacity var(--motion-view) var(--motion-ease-out);
+  }
+  #chanstate.on { opacity: 1; }
+  /* The dot indicator that replaced analog static. Three dots, one cycle. */
+  .pulse { display: flex; gap: 0.55em; }
+  .pulse i {
+    width: 0.5em; height: 0.5em; border-radius: 50%;
+    background: var(--ink); display: block;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  .pulse i:nth-child(2) { animation-delay: 0.15s; }
+  .pulse i:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes pulse { 0%,100% { opacity: 0.15; } 50% { opacity: 1; } }
+
+  /* digit entry, bottom-right, while a number is being typed */
+  #digits {
+    position: absolute; right: var(--space-pad-x); bottom: var(--layout-bar-height);
+    margin-bottom: var(--space-3);
+    line-height: 0;
+    opacity: 0;
+    transition: opacity var(--motion-quick) var(--motion-ease-out);
+  }
+  #digits.on { opacity: 1; }
+
+  /* ---------- poster grids (MOVIES / SHOWS) ---------- */
+  .gridhead { display: flex; justify-content: space-between; align-items: baseline; }
+  .gridtitle { line-height: 0; }
+  .gridcount { letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint); }
+  .grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(var(--layout-grid-columns), 1fr);
+    gap: var(--layout-grid-gap);
+    margin-top: var(--space-4);
+    overflow: hidden;
+    align-content: start;
+  }
+  .card {
+    position: relative;
+    aspect-ratio: var(--layout-poster-aspect);
+    background: var(--panel);
+    outline: var(--line-hair) solid transparent;
+    outline-offset: 0;
+    opacity: 0.55;
+    transition: opacity var(--motion-quick) var(--motion-ease-out),
+                transform var(--motion-quick) var(--motion-ease-out),
+                outline-color var(--motion-quick) var(--motion-ease-out);
+    overflow: hidden;
+  }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* Fallback when a poster is missing or still loading — the title in the
+     grid's own language rather than a broken-image glyph. */
+  .card .stub {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 1em; text-align: center;
+    font-size: var(--size-small); letter-spacing: var(--track-tight);
+    color: var(--dim);
+    flex-direction: column; gap: 0.6em;
+    text-transform: none;
+  }
+  .card .stub .y { color: var(--faint); letter-spacing: var(--track-label); font-size: 0.85em; }
+  /* A poster that loaded covers the stub; one that never arrives leaves the
+     title readable rather than leaving a grey rectangle. */
+  .card img + .stub { display: none; }
+  .card.sel {
+    opacity: 1;
+    transform: scale(1.04);
+    outline-color: var(--ink);
+  }
+  .card.sel::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0;
+    height: 3px; background: var(--red);
+  }
+
+  /* detail overlay */
+  #detail {
+    position: absolute; inset: 0;
+    background: var(--bg);
+    padding: var(--space-pad-y) var(--space-pad-x);
+    display: flex; gap: 4vw;
+    opacity: 0; pointer-events: none;
+    transition: opacity var(--motion-view) var(--motion-ease-out);
+    z-index: 3;
+  }
+  #detail.on { opacity: 1; pointer-events: all; }
+  #dposter {
+    width: var(--layout-detail-poster-width);
+    aspect-ratio: var(--layout-poster-aspect);
+    flex: none; background: var(--panel);
+  }
+  #dposter img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #dinfo { flex: 1; display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+  #dtitle { line-height: 0; }
+  #dmeta {
+    display: flex; gap: 2.5em;
+    letter-spacing: var(--track-label); font-size: var(--size-small); color: var(--dim);
+  }
+  #dmeta .rating { color: var(--red); }
+  #dplot {
+    font-size: var(--size-base); line-height: 1.85; color: var(--dim);
+    letter-spacing: var(--track-tight);
+    max-width: 62ch;
+    /* Body copy is the one place the UI is not uppercase: Cyrillic and Greek
+       synopses are unreadable in caps at couch distance. */
+    text-transform: none;
+  }
+
+  /* ---------- NEWS ----------
+     Time.mk on top, Θεσσαλονίκη on the bottom, split at the midline. Each
+     source has category rows that scroll left; headlines are never wrapped,
+     they are one row each, which is the rule the old teletext page earned
+     the hard way. */
+  #newsview { padding: var(--space-pad-y) 0; gap: var(--space-3); }
+  #newsview .sourcehead {
+    display: flex; align-items: baseline; gap: 1.4em;
+    padding: 0 var(--space-pad-x);
+  }
+  #newsview .sourcehead .name { line-height: 0; }
+  #newsview .sourcehead .region {
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint);
+  }
+  .newshalf { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); min-height: 0; overflow: hidden; }
+  .newshalf + .newshalf { border-top: var(--line-hair) solid var(--rule); padding-top: var(--space-3); }
+  /* Rows share their half evenly rather than stacking at the top — with
+     four categories up top and one below, an even split is what keeps the
+     midline reading as a split rather than as a gap. */
+  .catrow { flex: 1; display: flex; align-items: center; gap: 1.4em; overflow: hidden; white-space: nowrap; }
+  .catrow .cat {
+    flex: none;
+    padding: 0.5em 1em;
+    border: var(--line-hair) solid var(--rule);
+    letter-spacing: var(--track-label); font-size: var(--size-micro);
+    color: var(--dim);
+    margin-left: var(--space-pad-x);
+  }
+  .catrow .track {
+    display: flex; gap: 3.5em; flex: none;
+    animation: marquee linear infinite;
+  }
+  .catrow .item {
+    letter-spacing: var(--track-tight); font-size: var(--size-small);
+    color: var(--ink); text-transform: none;
+  }
+  .catrow .item::before {
+    content: "·"; color: var(--red); margin-right: 1em;
+  }
+  @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+  /* ---------- WEATHER ---------- */
+  #wxgrid { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: var(--space-5); }
+  .wxcity { display: flex; align-items: center; gap: 3vw; }
+  .wxname {
+    width: 22%; flex: none;
+    letter-spacing: var(--track-label); font-size: var(--size-large); color: var(--ink);
+    text-transform: none;
+  }
+  .wxdays { display: flex; gap: 3vw; flex: 1; justify-content: space-between; padding-right: 8vw; }
+  .wxday { display: flex; align-items: center; gap: 1.1em; }
+  .wxday .icon { width: 2.4em; height: 2.4em; flex: none; }
+  .wxday .icon svg { width: 100%; height: 100%; stroke: var(--ink); fill: none; stroke-width: 1.6; stroke-linecap: round; }
+  .wxday .when { letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint); }
+  .wxday .temps { letter-spacing: var(--track-tight); font-size: var(--size-base); color: var(--ink); }
+  .wxday .temps .lo { color: var(--dim); }
+
+  /* ---------- music (unchanged behaviour, themed values) ---------- */
+  #mbody { flex: 1; display: flex; align-items: center; gap: 4vw; min-height: 0; }
+  #mart { width: clamp(120px, 24vh, 260px); height: clamp(120px, 24vh, 260px); flex: none; line-height: 0; }
   #mart svg { width: 100%; height: 100%; display: block; }
-  #minfo { min-width: 0; display: flex; flex-direction: column; gap: 2.2vh; }
+  #minfo { min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
   #mtitle { line-height: 0; }
   #martist {
-    letter-spacing: 0.32em;
-    font-size: clamp(11px, 1.15vw, 16px);
-    color: var(--ink);
+    letter-spacing: var(--track-label); font-size: var(--size-large); color: var(--ink);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #malbum {
-    letter-spacing: 0.3em;
-    font-size: clamp(9px, 0.9vw, 12px);
-    color: var(--faint);
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-
-  #mprogwrap { display: flex; flex-direction: column; gap: 1.1vh; padding-bottom: 1vh; }
-  #mbar { position: relative; height: 1px; background: #1F1F1F; }
+  #mprogwrap { display: flex; flex-direction: column; gap: var(--space-2); }
+  #mbar { position: relative; height: var(--line-hair); background: var(--rule); }
   #mfill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--ink); }
-  /* translateX, not left: the playhead moves 4x a second, and a composited
-     transform keeps that off the Pi's layout path. */
   #mhead {
     position: absolute; top: 50%; left: 0;
     width: 0.5em; height: 0.5em; margin: -0.25em 0 0 -0.25em;
@@ -199,50 +374,26 @@
   }
   #mtimes {
     display: flex; justify-content: space-between;
-    letter-spacing: 0.3em;
-    font-size: clamp(9px, 0.85vw, 12px);
-    color: var(--faint);
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint);
   }
 
-  /* footer hints */
-  #hints, #mhints {
-    display: flex;
-    gap: 3.5em;
-    margin-top: 4vh;
-    letter-spacing: 0.3em;
-    font-size: clamp(9px, 0.85vw, 12px);
-    color: var(--faint);
-  }
-  #hints b, #mhints b { color: var(--dim); font-weight: 400; }
-
-  /* toast */
+  /* ---------- toast ---------- */
   #toast {
     position: absolute;
-    left: 50%; bottom: 5vh;
-    /* 100% + the bottom offset, so it parks fully off-screen whatever its
-       height works out to. A flat 200% left a sliver of it showing. */
-    transform: translate(-50%, calc(100% + 5vh));
-    background: #0D0D0D;
-    border: 1px solid #1F1F1F;
+    left: 50%; bottom: var(--space-5);
+    transform: translate(-50%, calc(100% + var(--space-5)));
+    background: var(--panel);
+    border: var(--line-hair) solid var(--rule);
     padding: 1em 1.8em;
-    letter-spacing: 0.3em;
-    font-size: clamp(10px, 1vw, 13px);
+    letter-spacing: var(--track-label);
+    font-size: var(--size-small);
     display: flex; align-items: center; gap: 1em;
-    transition: transform 300ms cubic-bezier(.2,.9,.3,1);
+    transition: transform var(--motion-toast) var(--motion-ease);
     white-space: nowrap;
+    z-index: 9;
   }
   #toast.show { transform: translate(-50%, 0); }
   #toast .tdot { width: 0.55em; height: 0.55em; border-radius: 50%; background: var(--red); flex: none; }
-
-  /* launch dim */
-  #veil {
-    position: fixed; inset: 0;
-    background: #000;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 350ms ease;
-  }
-  #veil.on { opacity: 1; pointer-events: all; }
 
   @media (prefers-reduced-motion: reduce) {
     * { animation: none !important; transition: none !important; }
@@ -251,576 +402,97 @@
 </head>
 <body>
 <div id="stage">
-<div id="homeview" class="view on">
-  <div id="topbar">
-    <div id="datewrap"><span id="reddot"></span><span id="datetext">—</span></div>
-    <div id="weather">
-      <div class="temp" id="wtemp">··</div>
-      <div id="wcond">CONNECTING</div>
-      <div class="tag" id="wtag"></div>
+
+  <!-- HOME -->
+  <div id="homeview" class="view on opaque">
+    <div class="topbar">
+      <div class="lead"><span class="reddot"></span><span id="datetext">—</span></div>
+      <div id="weather-brief">
+        <div class="temp" id="wtemp">··</div>
+        <div id="wcond">—</div>
+        <div class="tag" id="wtag"></div>
+      </div>
+    </div>
+    <div id="clockzone">
+      <div id="clock"></div>
+      <div id="greeting">—</div>
+    </div>
+    <div id="nowplaying"><span class="npdot"></span><span id="nptext"></span></div>
+    <div id="menu"></div>
+    <div class="hints" id="homehints"></div>
+  </div>
+
+  <!-- TV — paints only the bar; mpv shows through everywhere else -->
+  <div id="tvview" class="view">
+    <div id="chanstate"><span class="pulse"><i></i><i></i><i></i></span><span id="chanstatetext"></span></div>
+    <div id="digits"></div>
+    <div id="chanbar">
+      <div id="channum"></div>
+      <div id="channame">—</div>
+      <div id="chanclock">--:--</div>
     </div>
   </div>
 
-  <div id="clockzone">
-    <div id="clock"></div>
-    <div id="greeting">—</div>
-  </div>
-
-  <div id="nowplaying"><span class="npdot"></span><span id="nptext"></span></div>
-
-  <div id="menu"></div>
-
-  <div id="hints">
-    <span><b>◂ ▸</b>&nbsp;&nbsp;NAVIGATE</span>
-    <span><b>Ⓐ</b>&nbsp;&nbsp;OPEN</span>
-    <span><b>HOLD ⌂</b>&nbsp;&nbsp;RETURN HOME</span>
-  </div>
-</div>
-
-<div id="musicview" class="view" style="display:none">
-  <div id="mtop">
-    <div class="mlead"><span class="mdot"></span><span>SPOTIFY CONNECT</span></div>
-    <div id="mstate">—</div>
-  </div>
-
-  <div id="mbody">
-    <div id="mart"></div>
-    <div id="minfo">
-      <div id="mtitle"></div>
-      <div id="martist">—</div>
-      <div id="malbum"></div>
+  <!-- MOVIES / SHOWS share one view, switched by kind -->
+  <div id="gridview" class="view opaque">
+    <div class="gridhead">
+      <div class="gridtitle" id="gridtitle"></div>
+      <div class="gridcount" id="gridcount"></div>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="hints" id="gridhints"></div>
+    <div id="detail">
+      <div id="dposter"></div>
+      <div id="dinfo">
+        <div id="dtitle"></div>
+        <div id="dmeta"></div>
+        <div id="dplot"></div>
+        <div class="hints" id="detailhints"></div>
+      </div>
     </div>
   </div>
 
-  <div id="mprogwrap">
-    <div id="mbar"><div id="mfill"></div><div id="mhead"></div></div>
-    <div id="mtimes"><span id="mpos">0:00</span><span id="mlen">0:00</span></div>
+  <!-- NEWS -->
+  <div id="newsview" class="view opaque">
+    <div class="newshalf" id="newstop"></div>
+    <div class="newshalf" id="newsbottom"></div>
   </div>
 
-  <div id="mhints">
-    <span><b>◂ ▸</b>&nbsp;&nbsp;TRACK</span>
-    <span><b>Ⓐ</b>&nbsp;&nbsp;PLAY / PAUSE</span>
-    <span><b>Ⓑ</b>&nbsp;&nbsp;BACK</span>
+  <!-- WEATHER -->
+  <div id="weatherview" class="view opaque">
+    <div class="topbar">
+      <div class="lead"><span class="reddot"></span><span id="wxhead">—</span></div>
+      <div id="wxclock">--:--</div>
+    </div>
+    <div id="wxgrid"></div>
+    <div class="hints" id="wxhints"></div>
   </div>
-</div>
+
+  <!-- MUSIC -->
+  <div id="musicview" class="view opaque">
+    <div class="topbar">
+      <div class="lead"><span class="reddot"></span><span id="mhead">—</span></div>
+      <div id="mstate">—</div>
+    </div>
+    <div id="mbody">
+      <div id="mart"></div>
+      <div id="minfo">
+        <div id="mtitle"></div>
+        <div id="martist">—</div>
+        <div id="malbum"></div>
+      </div>
+    </div>
+    <div id="mprogwrap">
+      <div id="mbar"><div id="mfill"></div><div id="mhead2"></div></div>
+      <div id="mtimes"><span id="mpos">0:00</span><span id="mlen">0:00</span></div>
+    </div>
+    <div class="hints" id="mhints"></div>
+  </div>
+
 </div>
 
 <div id="toast"><span class="tdot"></span><span id="toasttext"></span></div>
-<div id="veil"></div>
 
-<script>
-/* =========================================================
-   NOTHING-STYLE HTPC LAUNCHER
-   Production kiosk UI. The backend at :8484 owns the app list
-   and launches/kills apps — there is no offline/demo path:
-   every Ⓐ press is a real launch, and a failure says why.
-   ========================================================= */
-
-const BACKEND = location.port === "8484" ? "" : "http://localhost:8484";
-
-/* ---------- 5x7 dot-matrix glyph engine ---------- */
-const GLYPHS = {
-  "0":["01110","10001","10011","10101","11001","10001","01110"],
-  "1":["00100","01100","00100","00100","00100","00100","01110"],
-  "2":["01110","10001","00001","00010","00100","01000","11111"],
-  "3":["11111","00010","00100","00010","00001","10001","01110"],
-  "4":["00010","00110","01010","10010","11111","00010","00010"],
-  "5":["11111","10000","11110","00001","00001","10001","01110"],
-  "6":["00110","01000","10000","11110","10001","10001","01110"],
-  "7":["11111","00001","00010","00100","01000","01000","01000"],
-  "8":["01110","10001","10001","01110","10001","10001","01110"],
-  "9":["01110","10001","10001","01111","00001","00010","01100"],
-  ":":["00000","00100","00100","00000","00100","00100","00000"],
-  "A":["01110","10001","10001","11111","10001","10001","10001"],
-  "B":["11110","10001","10001","11110","10001","10001","11110"],
-  "C":["01110","10001","10000","10000","10000","10001","01110"],
-  "D":["11100","10010","10001","10001","10001","10010","11100"],
-  "E":["11111","10000","10000","11110","10000","10000","11111"],
-  "F":["11111","10000","10000","11110","10000","10000","10000"],
-  "G":["01110","10001","10000","10111","10001","10001","01111"],
-  "H":["10001","10001","10001","11111","10001","10001","10001"],
-  "I":["01110","00100","00100","00100","00100","00100","01110"],
-  "J":["00111","00010","00010","00010","00010","10010","01100"],
-  "K":["10001","10010","10100","11000","10100","10010","10001"],
-  "L":["10000","10000","10000","10000","10000","10000","11111"],
-  "M":["10001","11011","10101","10101","10001","10001","10001"],
-  "N":["10001","11001","10101","10011","10001","10001","10001"],
-  "O":["01110","10001","10001","10001","10001","10001","01110"],
-  "P":["11110","10001","10001","11110","10000","10000","10000"],
-  "Q":["01110","10001","10001","10001","10101","10010","01101"],
-  "R":["11110","10001","10001","11110","10100","10010","10001"],
-  "S":["01111","10000","10000","01110","00001","00001","11110"],
-  "T":["11111","00100","00100","00100","00100","00100","00100"],
-  "U":["10001","10001","10001","10001","10001","10001","01110"],
-  "V":["10001","10001","10001","10001","10001","01010","00100"],
-  "W":["10001","10001","10001","10101","10101","11011","10001"],
-  "X":["10001","10001","01010","00100","01010","10001","10001"],
-  "Y":["10001","10001","01010","00100","00100","00100","00100"],
-  "Z":["11111","00001","00010","00100","01000","10000","11111"],
-  "°":["01100","10010","10010","01100","00000","00000","00000"],
-  " ":["00000","00000","00000","00000","00000","00000","00000"],
-  // Punctuation exists for track titles. Without it "DON'T STOP (LIVE)"
-  // renders as "DON T STOP  LIVE " — unknown glyphs fall back to space.
-  "-":["00000","00000","00000","11111","00000","00000","00000"],
-  ".":["00000","00000","00000","00000","00000","01100","01100"],
-  ",":["00000","00000","00000","00000","01100","01100","11000"],
-  "'":["01100","01100","11000","00000","00000","00000","00000"],
-  "!":["00100","00100","00100","00100","00100","00000","00100"],
-  "?":["01110","10001","00001","00110","00100","00000","00100"],
-  "&":["01100","10010","10100","01000","10101","10010","01101"],
-  "(":["00010","00100","01000","01000","01000","00100","00010"],
-  ")":["01000","00100","00010","00010","00010","00100","01000"],
-  "/":["00001","00010","00010","00100","01000","01000","10000"],
-  "+":["00000","00100","00100","11111","00100","00100","00000"],
-  "*":["00000","10101","01110","11111","01110","10101","00000"],
-};
-
-/* Render text as an SVG of round dots. Ghost dots (off) are
-   faintly visible on the clock — the NDot matrix effect. */
-function dotSVG(text, dotPx, opts = {}) {
-  const gap = dotPx * (opts.gap ?? 0.55);
-  const step = dotPx + gap;
-  const charGap = step * (opts.charGap ?? 1.4);
-  const ghost = opts.ghost ?? false;
-  const color = opts.color ?? "var(--ink)";
-  let x = 0;
-  let dots = "";
-  for (const raw of text.toUpperCase()) {
-    const g = GLYPHS[raw] || GLYPHS[" "];
-    for (let r = 0; r < 7; r++) {
-      for (let c = 0; c < 5; c++) {
-        const on = g[r][c] === "1";
-        if (!on && !ghost) continue;
-        const cx = x + c * step + dotPx / 2;
-        const cy = r * step + dotPx / 2;
-        dots += `<circle cx="${cx}" cy="${cy}" r="${dotPx/2}" fill="${on ? color : "var(--dot-off)"}"/>`;
-      }
-    }
-    x += 5 * step + charGap;
-  }
-  const w = Math.max(1, x - charGap);
-  const h = 7 * step - gap;
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">${dots}</svg>`;
-}
-
-/* ---------- clock ---------- */
-const clockEl = document.getElementById("clock");
-const dateEl = document.getElementById("datetext");
-const greetEl = document.getElementById("greeting");
-const DAYS = ["SUNDAY","MONDAY","TUESDAY","WEDNESDAY","THURSDAY","FRIDAY","SATURDAY"];
-const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
-let lastClock = "";
-
-function clockDotSize() {
-  return Math.max(6, Math.round(Math.min(innerWidth * 0.019, innerHeight * 0.034)));
-}
-function drawClock(force) {
-  const d = new Date();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  const colon = d.getSeconds() % 2 === 0 ? ":" : " ";
-  const face = hh + colon + mm;
-  if (face === lastClock && !force) return;
-  lastClock = face;
-  clockEl.innerHTML = dotSVG(face, clockDotSize(), { ghost: true });
-  dateEl.textContent = `${DAYS[d.getDay()]} · ${MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2,"0")}`;
-  const h = d.getHours();
-  greetEl.textContent = h < 5 ? "LATE NIGHT" : h < 12 ? "GOOD MORNING" : h < 18 ? "GOOD AFTERNOON" : "GOOD EVENING";
-}
-setInterval(drawClock, 1000);
-
-/* ---------- weather (Open-Meteo, no key needed) ---------- */
-const WMO = {
-  0:"CLEAR", 1:"MOSTLY CLEAR", 2:"PARTLY CLOUDY", 3:"OVERCAST",
-  45:"FOG", 48:"FOG", 51:"DRIZZLE", 53:"DRIZZLE", 55:"DRIZZLE",
-  61:"LIGHT RAIN", 63:"RAIN", 65:"HEAVY RAIN", 66:"FREEZING RAIN", 67:"FREEZING RAIN",
-  71:"LIGHT SNOW", 73:"SNOW", 75:"HEAVY SNOW", 77:"SNOW",
-  80:"SHOWERS", 81:"SHOWERS", 82:"HEAVY SHOWERS",
-  85:"SNOW SHOWERS", 86:"SNOW SHOWERS", 95:"THUNDERSTORM", 96:"THUNDERSTORM", 99:"THUNDERSTORM",
-};
-async function loadWeather() {
-  // Coordinates come from backend config in production; fall back to defaults.
-  let lat = 41.117, lon = 20.802; // change in server/config.json
-  try {
-    const cfg = await fetch(BACKEND + "/config", { signal: AbortSignal.timeout(2500) }).then(r => r.json());
-    if (cfg.weather) { lat = cfg.weather.lat; lon = cfg.weather.lon; }
-  } catch (_) {}
-  try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code`;
-    const j = await fetch(url, { signal: AbortSignal.timeout(4000) }).then(r => r.json());
-    const t = Math.round(j.current.temperature_2m);
-    document.getElementById("wtemp").innerHTML = dotSVG(`${t}°`, Math.max(3, Math.round(innerWidth*0.004)));
-    document.getElementById("wcond").textContent = WMO[j.current.weather_code] || "—";
-    document.getElementById("wtag").textContent = "";
-  } catch (_) {
-    // Preview / offline fallback
-    document.getElementById("wtemp").innerHTML = dotSVG("24°", Math.max(3, Math.round(innerWidth*0.004)));
-    document.getElementById("wcond").textContent = "PARTLY CLOUDY";
-    document.getElementById("wtag").textContent = "DEMO DATA";
-  }
-}
-setInterval(loadWeather, 15 * 60 * 1000);
-
-/* ---------- menu ---------- */
-const ICONS = {
-  tv:        '<svg viewBox="0 0 40 40"><rect x="4" y="12" width="32" height="22" rx="1"/><path d="M13 12 20 5l7 7"/><circle cx="30" cy="18" r="1.4" fill="currentColor"/></svg>',
-  music:     '<svg viewBox="0 0 40 40"><path d="M14 30V9l18-3v20"/><circle cx="10" cy="30" r="4"/><circle cx="28" cy="26" r="4"/></svg>',
-  apps:      '<svg viewBox="0 0 40 40"><rect x="6" y="6" width="11" height="11"/><rect x="23" y="6" width="11" height="11"/><rect x="6" y="23" width="11" height="11"/><rect x="23" y="23" width="11" height="11"/></svg>',
-  settings:  '<svg viewBox="0 0 40 40"><path d="M6 12h20M32 12h2M6 28h8M20 28h14"/><circle cx="28" cy="12" r="3.5"/><circle cx="16" cy="28" r="3.5"/></svg>',
-};
-const FALLBACK_APPS = [
-  { id: "tv",       label: "TV" },
-  // view, not command: music is a screen in this page, not a process.
-  { id: "music",    label: "MUSIC", view: "music" },
-  { id: "apps",     label: "APPS" },
-  { id: "settings", label: "SETTINGS" },
-];
-let APPS = FALLBACK_APPS;
-let sel = 0;
-const menuEl = document.getElementById("menu");
-
-function buildMenu() {
-  menuEl.innerHTML = "";
-  APPS.forEach((app, i) => {
-    const t = document.createElement("div");
-    t.className = "tile" + (i === sel ? " sel" : "");
-    t.innerHTML = `
-      <div class="icon">${ICONS[app.id] || ICONS.apps}</div>
-      <div class="label">${app.label}</div>
-      <div class="dotlabel">${dotSVG(app.label, Math.max(2.4, innerWidth*0.0028), {charGap:1.1})}</div>
-      <div class="marker"></div>`;
-    t.addEventListener("click", () => { sel = i; refreshSel(); launch(); });
-    menuEl.appendChild(t);
-  });
-}
-function refreshSel() {
-  [...menuEl.children].forEach((t, i) => t.classList.toggle("sel", i === sel));
-}
-function move(dir) {
-  sel = (sel + dir + APPS.length) % APPS.length;
-  refreshSel();
-}
-
-/* ---------- launching ---------- */
-const toast = document.getElementById("toast");
-const toastText = document.getElementById("toasttext");
-let toastTimer;
-function showToast(msg, ms = 2200) {
-  toastText.textContent = msg;
-  toast.classList.add("show");
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove("show"), ms);
-}
-async function launch() {
-  const app = APPS[sel];
-
-  // In-page views launch nothing, so there is no veil and no wait — the
-  // music screen fades up over the launcher in one motion.
-  if (app.view === "music") { showView("music"); return; }
-
-  const veil = document.getElementById("veil");
-  veil.classList.add("on");
-  let started = false;
-  try {
-    const res = await fetch(`${BACKEND}/launch/${app.id}`, { method: "POST" });
-    const body = await res.json().catch(() => ({}));
-    started = body.ok === true;
-    showToast(started ? `OPENING ${app.label}` : (body.msg || "LAUNCH FAILED").toUpperCase());
-  } catch (_) {
-    showToast("BACKEND OFFLINE · CHECK SERVER");
-  }
-  // Nothing is coming up over us on failure — don't sit on a black screen.
-  setTimeout(() => veil.classList.remove("on"), started ? 4000 : 0);
-}
-
-/* The backend owns the app list. It starts a moment before this page, so
-   keep retrying rather than settling for the placeholder tiles. */
-async function loadApps(attempt = 0) {
-  try {
-    const cfg = await fetch(BACKEND + "/config", { signal: AbortSignal.timeout(2500) }).then(r => r.json());
-    if (Array.isArray(cfg.apps) && cfg.apps.length) APPS = cfg.apps;
-    buildMenu();
-  } catch (_) {
-    if (attempt === 0) buildMenu();  // placeholder tiles so the screen isn't bare
-    if (attempt === 2) showToast("BACKEND OFFLINE · CHECK SERVER", 4000);
-    setTimeout(() => loadApps(attempt + 1), 2000);
-  }
-}
-
-/* =========================================================
-   VIEWS
-   ========================================================= */
-let view = "home";
-
-function showView(name) {
-  if (view === name) return;
-  const from = document.getElementById(view + "view");
-  const to = document.getElementById(name + "view");
-  view = name;
-
-  to.style.display = "flex";
-  to.classList.add("front");
-  // Two frames: one for display to take effect, one for the class change to
-  // register as a transition rather than an instant jump.
-  requestAnimationFrame(() => requestAnimationFrame(() => to.classList.add("on")));
-  setTimeout(() => {
-    from.classList.remove("on");
-    from.style.display = "none";
-    to.classList.remove("front");
-  }, 240);
-
-  if (name === "music") { pollMusic(); }
-}
-
-/* =========================================================
-   MUSIC — spotifyd over MPRIS, rendered in the launcher's own language.
-   Playback is driven from the phone (Spotify Connect); this screen shows
-   what is on and offers the three controls a remote can reach.
-   Volume is deliberately absent — that is the TV's job.
-   ========================================================= */
-const mArt = document.getElementById("mart");
-const mTitle = document.getElementById("mtitle");
-const mArtist = document.getElementById("martist");
-const mAlbum = document.getElementById("malbum");
-const mState = document.getElementById("mstate");
-const mBar = document.getElementById("mbar");
-const mFill = document.getElementById("mfill");
-const mHead = document.getElementById("mhead");
-const mPos = document.getElementById("mpos");
-const mLen = document.getElementById("mlen");
-const npEl = document.getElementById("nowplaying");
-const npText = document.getElementById("nptext");
-
-const music = {
-  available: true,   // false once we know playerctl is absent — stop polling
-  playing: false,
-  trackKey: "",
-  length: 0,
-  posBase: 0,        // last position reported by the backend
-  posAt: 0,          // performance.now() when it was reported
-  seq: null,         // /home counter, so the TV remote's Exit closes this view
-};
-
-function mmss(s) {
-  s = Math.max(0, Math.floor(s || 0));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/* Cover art as a halftone dot grid: same visual vocabulary as the clock,
-   and it keeps a photographic album cover from looking pasted onto the
-   design. Redrawn once per track, never per frame. */
-const ART_N = 34;
-function artPlaceholder() {
-  const step = 100 / ART_N;
-  let s = "";
-  for (let y = 0; y < ART_N; y++)
-    for (let x = 0; x < ART_N; x++)
-      s += `<circle cx="${(x + .5) * step}" cy="${(y + .5) * step}" r="${step * .16}"/>`;
-  return `<svg viewBox="0 0 100 100" fill="var(--dot-off)">${s}</svg>`;
-}
-function drawArt(img) {
-  const c = document.createElement("canvas");
-  c.width = c.height = ART_N;
-  const g = c.getContext("2d", { willReadFrequently: true });
-  g.drawImage(img, 0, 0, ART_N, ART_N);
-  let d;
-  try { d = g.getImageData(0, 0, ART_N, ART_N).data; }
-  catch (_) { return artPlaceholder(); }   // tainted canvas: fail quietly
-  const step = 100 / ART_N;
-  let s = "";
-  for (let y = 0; y < ART_N; y++) {
-    for (let x = 0; x < ART_N; x++) {
-      const i = (y * ART_N + x) * 4;
-      const lum = (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
-      const r = (step / 2) * (0.14 + 0.86 * lum);
-      if (r < 0.1) continue;
-      s += `<circle cx="${(x + .5) * step}" cy="${(y + .5) * step}" r="${r.toFixed(2)}"/>`;
-    }
-  }
-  return `<svg viewBox="0 0 100 100" fill="var(--ink)">${s}</svg>`;
-}
-function loadArt(hasArt) {
-  if (!hasArt) { mArt.innerHTML = artPlaceholder(); return; }
-  const img = new Image();
-  img.crossOrigin = "anonymous";   // backend sends ACAO:*, so pixels stay readable
-  img.onload = () => { mArt.innerHTML = drawArt(img); };
-  img.onerror = () => { mArt.innerHTML = artPlaceholder(); };
-  img.src = `${BACKEND}/music/art?t=${Date.now()}`;
-}
-
-/* Track titles are long and arbitrary, so the dot size is solved for rather
-   than picked: dotSVG advances step*(5 + charGap) per glyph with
-   step = dotPx * 1.55, so a title of n characters fits the column at
-   dotPx = width / (n * 10.23). A fixed viewport fraction runs "HOPPIPOLLA
-   (DON'T STOP!)" straight off the right edge of a 1080p screen. */
-const TITLE_CHAR_GAP = 1.6;
-const TITLE_PER_CHAR = 1.55 * (5 + TITLE_CHAR_GAP);
-function titleDots(text) {
-  const MAX = 28;
-  let t = (text || "").toUpperCase();
-  if (t.length > MAX) t = t.slice(0, MAX - 3).trimEnd() + "...";
-  const n = Math.max(1, t.length);
-  const avail = (mTitle.clientWidth || innerWidth * 0.55) * 0.98;
-  const size = Math.max(2.2, Math.min(innerHeight * 0.013, avail / (n * TITLE_PER_CHAR)));
-  return dotSVG(t, size, { charGap: TITLE_CHAR_GAP });
-}
-
-function applyMusic(s) {
-  // The TV remote's Exit key posts /home, which has no process to kill while
-  // this view is open — the counter is how we hear about it.
-  if (music.seq !== null && s.home_seq !== music.seq && view === "music") showView("home");
-  music.seq = s.home_seq;
-
-  music.available = s.available !== false;
-  music.playing = !!s.playing;
-
-  if (!music.available) {
-    mState.textContent = "UNAVAILABLE";
-    mTitle.innerHTML = titleDots("NO PLAYER");
-    mArtist.textContent = "PLAYERCTL IS NOT INSTALLED";
-    mAlbum.textContent = "";
-    mArt.innerHTML = artPlaceholder();
-    npEl.classList.remove("on");
-    return;
-  }
-
-  if (!s.status) {
-    mState.textContent = "IDLE";
-    mTitle.innerHTML = titleDots("NOTHING PLAYING");
-    mArtist.textContent = "START SPOTIFY ON YOUR PHONE";
-    mAlbum.textContent = "THIS BOX IS THE SPEAKER";
-    mArt.innerHTML = artPlaceholder();
-    music.trackKey = "";
-    music.length = 0;
-    mFill.style.width = "0%"; mHead.style.transform = "translateX(0)";
-    mPos.textContent = mLen.textContent = "0:00";
-    npEl.classList.remove("on");
-    return;
-  }
-
-  const key = `${s.artist} — ${s.title}`;
-  if (key !== music.trackKey) {
-    music.trackKey = key;
-    music.title = s.title;
-    mTitle.innerHTML = titleDots(s.title);
-    loadArt(s.art);
-  }
-  mArtist.textContent = (s.artist || "UNKNOWN ARTIST").toUpperCase();
-  mAlbum.textContent = (s.album || "").toUpperCase();
-  mState.textContent = s.playing ? "PLAYING" : "PAUSED";
-
-  music.length = s.length || 0;
-  music.posBase = s.position || 0;
-  music.posAt = performance.now();
-  mLen.textContent = mmss(music.length);
-  tickProgress();
-
-  npText.innerHTML =
-    `<span class="nplabel">${s.playing ? "NOW PLAYING" : "PAUSED"}</span>&nbsp;&nbsp;` +
-    `${(s.title || "").toUpperCase()} · ${(s.artist || "").toUpperCase()}`;
-  npEl.classList.add("on");
-}
-
-/* Position is interpolated between polls so the bar moves smoothly at 4 Hz
-   without asking the backend (and therefore playerctl) four times a second. */
-function tickProgress() {
-  if (view !== "music" || !music.length) return;
-  const drift = music.playing ? (performance.now() - music.posAt) / 1000 : 0;
-  const pos = Math.min(music.length, music.posBase + drift);
-  const pct = (pos / music.length) * 100;
-  mFill.style.width = `${pct}%`;
-  mHead.style.transform = `translateX(${mBar.clientWidth * pct / 100}px)`;
-  mPos.textContent = mmss(pos);
-}
-setInterval(tickProgress, 250);
-
-async function pollMusic() {
-  if (!music.available) return;
-  try {
-    const s = await fetch(`${BACKEND}/music/status`, { signal: AbortSignal.timeout(2500) })
-      .then(r => r.json());
-    applyMusic(s);
-  } catch (_) { /* backend blip — keep the last frame and try again */ }
-}
-
-/* Poll fast enough to feel live on the music screen, slowly on the home
-   screen where it only feeds a one-line strip, and not at all once we know
-   there is no player to ask. Each poll spawns a playerctl on the Pi. */
-function musicLoop() {
-  if (!music.available) return;
-  setTimeout(async () => { await pollMusic(); musicLoop(); },
-             view === "music" ? 1000 : 6000);
-}
-
-async function musicCmd(cmd) {
-  try {
-    const r = await fetch(`${BACKEND}/music/${cmd}`, { method: "POST" }).then(r => r.json());
-    if (!r.ok) showToast((r.msg || "MUSIC UNAVAILABLE").toUpperCase());
-  } catch (_) {
-    showToast("BACKEND OFFLINE · CHECK SERVER");
-  }
-  pollMusic();   // snap the UI to the new state instead of waiting for the tick
-}
-
-/* =========================================================
-   INPUT — one set of intents, routed by whichever view is up.
-   The same three gestures reach the gamepad, a keyboard, and the TV
-   remote (cecd.py turns CEC presses into these very keys).
-   ========================================================= */
-function onNav(dir) {
-  if (view === "music") musicCmd(dir > 0 ? "next" : "previous");
-  else move(dir);
-}
-function onOk() {
-  if (view === "music") musicCmd("playpause");
-  else launch();
-}
-function onBack() {
-  if (view === "music") showView("home");
-}
-
-addEventListener("keydown", (e) => {
-  if (e.key === "ArrowRight") onNav(1);
-  else if (e.key === "ArrowLeft") onNav(-1);
-  else if (e.key === "Enter") onOk();
-  else if (e.key === "Escape" || e.key === "Backspace") onBack();
-});
-
-/* ---------- input: gamepad ---------- */
-const pad = { left: false, right: false, a: false, b: false };
-function pollPads() {
-  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
-  for (const gp of gps) {
-    if (!gp) continue;
-    const ax = gp.axes[0] || 0;
-    const left  = (gp.buttons[14] && gp.buttons[14].pressed) || ax < -0.5;
-    const right = (gp.buttons[15] && gp.buttons[15].pressed) || ax > 0.5;
-    const a     = gp.buttons[0] && gp.buttons[0].pressed;
-    const b     = gp.buttons[1] && gp.buttons[1].pressed;
-    if (left && !pad.left) onNav(-1);
-    if (right && !pad.right) onNav(1);
-    if (a && !pad.a) onOk();
-    if (b && !pad.b) onBack();
-    pad.left = left; pad.right = right; pad.a = a; pad.b = b;
-    break;
-  }
-}
-// 20 Hz, not requestAnimationFrame: rAF pins a core at 60 Hz forever on the
-// Pi just to read a d-pad. Menu nav feels identical.
-setInterval(pollPads, 50);
-addEventListener("gamepadconnected", () => showToast("CONTROLLER CONNECTED"));
-
-/* ---------- boot ---------- */
-addEventListener("resize", () => {
-  drawClock(true);
-  buildMenu();
-  if (music.title) mTitle.innerHTML = titleDots(music.title);  // dot size is viewport-derived
-});
-drawClock(true);
-loadWeather();
-loadApps();
-pollMusic();
-musicLoop();
-</script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
