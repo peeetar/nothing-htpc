@@ -25,7 +25,7 @@ Gamepad (8BitDo, XInput):
 | A | select digit |
 | B | close keypad / stop a film / leave teletext / **leave cable mode** |
 | dpad up/down in teletext | subpages, or the cursor on 993/994 |
-| dpad left/right in teletext | jump initial letter on 993/994 |
+| dpad left/right in teletext | turn a whole subpage on 993/994 |
 
 Keyboard — the whole set, for testing on a desktop:
 
@@ -33,7 +33,7 @@ Keyboard — the whole set, for testing on a desktop:
 |---|---|
 | `PgUp` / `PgDn` | channel up / down (hold to zap; nothing loads until you stop) |
 | `↑` / `↓` | channel up / down, subpages in teletext, cursor on 993/994, move in the keypad |
-| `←` / `→` | move in the keypad, jump initial letter on 993/994 |
+| `←` / `→` | move in the keypad, turn a subpage on 993/994 |
 | `0`-`9` | tune directly; 3rd digit tunes instantly, else 2 s after the last |
 | `x` | open / close the keypad |
 | `Enter` | press the highlighted keypad button |
@@ -102,23 +102,77 @@ answers, and two cities out of three is still a page.
 
 ### 993 / 994 — the library
 
-A teletext index of films and series, which is what a 90s box would have
-done with them. Rows come from `library.tsv` (tab-separated:
-`kind, title, year, url`), sorted by title.
+A teletext index of films and series, which is what a 90s box would have done
+with them: the list keeps the left half of the screen, and a detail panel for
+whatever the cursor is on keeps the right.
+
+```
+993  MOVIES                        │  ┌────────┐  SPIDER-MAN - NO WAY HOME
+> SPIDER-MAN - NO WAY HOME (2021)  │  │        │  2021
+  DUNE PART TWO (2024)             │  │ poster │  2H 28M
+  THE GODFATHER (1972)             │  │        │  TMDB 8.0
+  ...                              │  └────────┘
+                                   │  Peter Parker is unmasked and no
+                                   │  longer able to separate his ...
+```
 
 | Control | |
 |---|---|
 | dpad up/down, `↑`/`↓` | move the cursor; the subpage turns under it |
-| dpad left/right, `←`/`→` | jump to the next / previous initial letter |
+| dpad left/right, `←`/`→` | turn a whole subpage (12 rows) |
 | A, `Enter` | play the highlighted row |
-| B, `Esc` | stop and go back to the page |
+| B, `Esc` | stop a film, cancel a resolve, or leave the page |
 
-Letter-jump is there because paging a few hundred titles eleven rows at a
-time with a d-pad is unusable.
+Rows are `TITLE IN CAPS (YEAR)`, in **the order the file is in** — the daemon
+sorts by release date, so 993 opens on what has just arrived. It is not
+re-sorted here, which is also why left/right turns a page instead of jumping
+an initial letter: with two thousand titles, a screenful is the unit that
+means something.
 
-A row with an empty url says `NO SOURCE` on the banner and plays nothing.
-Regenerate the whole file to fill it; unlike `channels.m3u`, nothing in it
-is hand-maintained state.
+The panel is drawn from columns that ride along in `library.tsv`, so moving
+the cursor never touches the network — that is the whole reason the metadata
+is in the file instead of behind a per-title request. **The poster is not
+drawn yet:** the frame is reserved space, labelled `POSTER` / `NO POSTER`, and
+the url is already in the file for the pass that wires the image up.
+
+A row with an empty url shows `NO SOURCE` in the panel, and says so on the
+page if you press OK anyway.
+
+#### The file
+
+`library.tsv` is tab-separated and **is a cache, not hand-maintained state**
+(unlike `channels.m3u`). It is gitignored for that reason: cabletv.lua
+rewrites it. Columns:
+
+```
+kind  title  year  url  runtime-minutes  rating  poster-url  overview
+```
+
+The last four are optional — a four-column file written before the detail
+panel existed still loads, the panel just has nothing to show. `kind` is
+`movie` (993) or `show` (994); ee3 is a film catalogue, so after a sync 994
+says so and is empty.
+
+Two of those columns are waiting on something else, and both degrade to a
+label rather than a hole: **overview** is empty because ee3's `/api/movies`
+does not send one (it returns title, release date, runtime, rating and the
+two image paths), so the panel reads `NO SYNOPSIS`; **poster** is filled with
+a TMDB url, but nothing draws it yet.
+
+#### Sync
+
+Opening 993 or 994 checks the cache:
+
+| Cache | What you see |
+|---|---|
+| missing, or no playable urls in it | `BUFFERING . . .`, then the page |
+| older than 6 h | the cached page **now**, refreshed underneath it |
+| fresh | the page |
+
+The refresh is `ee3resolve.py --library`, run as a subprocess and async, so
+the box stays live throughout; a refresh that lands while you are reading
+keeps the cursor on the title it was on, not on the row number. Roughly 2000
+titles, about 17 s on a warm daemon.
 
 #### Where the urls come from
 
@@ -126,17 +180,22 @@ The url column normally holds `ee3:<id>`, not a playable URL — ee3 mints a
 link per playback, so anything baked into the file would be dead by the time
 someone pressed OK. Pressing A on such a row runs `ee3resolve.py`, which asks
 the daemon (`server/movieapi.py`, on the LXC at `192.168.1.16:1209`) for a
-fresh one. The banner reads `RESOLVING - <title>` while that happens, and the
-picture stays on static; the resolve is async, so channel-up still works and
-zapping away cancels it rather than yanking you back a minute later.
+fresh one. The banner reads `RESOLVING . . . <title>` while that happens and
+stays up for the whole wait — a resolve can take a minute, and the picture is
+static until it lands. The resolve is async, so channel-up still works;
+zapping away cancels it rather than yanking you back a minute later, and B
+backs out of the wait to the page you came from.
 
-If it fails you get one sentence on the banner — `NO STREAMS AVAILABLE`,
-`EE3 DAEMON UNREACHABLE AT ...` — and the page you came from, not silent
-static.
+If it fails you get one sentence — `NO STREAMS AVAILABLE`, `EE3 DAEMON
+UNREACHABLE AT ...` — on the bottom row of the page you came from, and not
+silent static. It goes on the page rather than the banner because a teletext
+page is opaque and is composited *above* the banner: a banner shown under one
+cannot be seen.
 
 ```bash
-# refresh the catalogue (writes library.tsv atomically)
+# refresh the catalogue by hand (writes library.tsv atomically)
 cabletv/ee3resolve.py --library
+cabletv/ee3resolve.py --library 45     # ... giving up after 45 s
 
 # resolve one id by hand, to see what the box would see
 cabletv/ee3resolve.py ee3:6f2a91c
@@ -149,6 +208,8 @@ the file is not tied to ee3.
 |---|---|
 | `EE3_API` | daemon base url (default `http://192.168.1.16:1209`) |
 | `CABLETV_RESOLVE_SECONDS` | give up on a resolve after this long (default 130) |
+| `CABLETV_LIBRARY_SECONDS` | give up on a catalogue sync after this long (default 90) |
+| `CABLETV_LIBRARY_TTL` | seconds before the cache counts as stale (default 21600) |
 
 A film is not a channel: when one ends or fails, you go back to the page
 you picked it from instead of into the dead-channel retry loop.

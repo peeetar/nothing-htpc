@@ -8,6 +8,7 @@ server/movieapi.py, which runs on the LXC and holds the ee3 session.
 
     $ ee3resolve.py ee3:6f2a91c        -> prints a URL, exit 0
     $ ee3resolve.py --library          -> rewrites library.tsv in place
+    $ ee3resolve.py --library 45       -> ... giving up after 45 s
 
 Failures print one sentence to stderr and exit non-zero; that sentence is
 what cabletv.lua puts on the banner, so it has to read like something a
@@ -78,10 +79,14 @@ def resolve(ref):
     return url
 
 
-def refresh_library(dest):
-    # No deadline games here: this is run by hand or from cron, never with a
-    # TV waiting on it, and paging the whole catalogue takes a while.
-    status, body = _get("/library.tsv", timeout=300)
+LIBRARY_TIMEOUT = float(os.environ.get("EE3_LIBRARY_TIMEOUT", "300"))
+
+
+def refresh_library(dest, timeout=None):
+    # Paging the whole catalogue takes a while, so the default deadline is
+    # generous: this is normally run by hand or from cron. cabletv.lua passes
+    # a shorter one, because there it *is* run with a TV waiting on it.
+    status, body = _get("/library.tsv", timeout=timeout or LIBRARY_TIMEOUT)
     if status != 200:
         raise SystemExit(_detail(status, body))
     text = body.decode("utf-8", "replace")
@@ -96,14 +101,21 @@ def refresh_library(dest):
 
 
 def main(argv):
-    if len(argv) != 2 or argv[1] in ("-h", "--help"):
+    if len(argv) < 2 or len(argv) > 3 or argv[1] in ("-h", "--help"):
         sys.stderr.write(__doc__)
         return 2
     if argv[1] in ("--library", "--refresh-library"):
         dest = DIR / "library.tsv"
-        n = refresh_library(dest)
+        try:
+            timeout = float(argv[2]) if len(argv) == 3 else None
+        except ValueError:
+            raise SystemExit("--library takes a number of seconds, not %r" % argv[2])
+        n = refresh_library(dest, timeout)
         sys.stderr.write("wrote %d titles to %s\n" % (n, dest))
         return 0
+    if len(argv) != 2:
+        sys.stderr.write(__doc__)
+        return 2
     print(resolve(argv[1]))
     return 0
 

@@ -13,3 +13,8 @@ server/config.local.json
 # EE3_ENV_FILE.
 server/ee3.env
 *.tsv.tmp
+
+# On-demand catalogue cache. cabletv.lua refreshes this from the ee3 daemon
+# (ee3resolve.py --library) whenever 993 is opened with no cache or a stale
+# one, so a tracked copy would make every "git pull" on the box a conflict.
+cabletv/library.tsv

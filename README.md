@@ -271,10 +271,18 @@ Live channels live in `cabletv/channels.m3u`; free IPTV lists come from
 [iptv-org](https://github.com/iptv-org/iptv). Prefer H.264 streams.
 
 On-demand films and series are teletext pages 993 and 994, read from
-`cabletv/library.tsv`. Highlight a row, press OK, mpv plays it — the same
-loadfile path a channel uses. The file has four columns
-(`kind, title, year, url`) and the player never learns where the titles came
+`cabletv/library.tsv`. Highlight a row and a detail panel on the right shows
+the title, year, runtime, rating, synopsis and a reserved poster frame; press
+OK and mpv plays it — the same loadfile path a channel uses. The file has
+eight columns (`kind, title, year, url, runtime, rating, poster, overview`,
+the last four optional) and the player never learns where the titles came
 from; whatever fills the file does the parsing.
+
+That file is a **cache**, and gitignored: opening 993 with no cache fetches it
+from the daemon behind a `BUFFERING . . .` page, and opening it with one over
+6 h old shows the cached page immediately and refreshes underneath. Rows stay
+in the daemon's order — newest release first — so the page opens on what has
+just arrived.
 
 ### The on-demand backend
 
@@ -310,9 +318,15 @@ EE3_ENV_FILE=server/ee3.env python3 server/movieapi.py
 curl -s localhost:1209/health
 ```
 
-`server/ee3-api.service` is a unit for it. On the Pi, refresh the catalogue
-with `cabletv/ee3resolve.py --library` and set `EE3_API` if the daemon is not
-at the default address.
+`server/ee3-api.service` is a unit for it. The Pi refreshes the catalogue by
+itself when 993 is opened; `cabletv/ee3resolve.py --library` does it by hand,
+and `EE3_API` points at the daemon if it is not at the default address.
+
+`GET /library.tsv` carries the detail-panel columns (runtime, rating, TMDB
+poster url, overview) alongside the four the player has always read. They are
+shipped in the file rather than fetched per title on purpose: the panel
+redraws on every cursor move, and a round trip under the d-pad would make
+scrolling feel broken.
 
 `/resolve` filters what it offers to what a 3B+ can actually decode: H.264,
 1080p max, no HEVC/VP9/AV1. That is the same constraint as everywhere else in

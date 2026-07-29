@@ -12,7 +12,7 @@ server.py. The Pi's half of this is cabletv/ee3resolve.py, which is stdlib.
 Endpoints:
   GET /health              auth state, without leaking the password
   GET /movies              proxy of ee3's /api/movies (all query params pass)
-  GET /resolve/{movie_id}  movie id -> a URL mpv can actually open
+  GET /resolve/{movie_id}  movie id -> a magnet URI the Pi can stream
   GET /library.tsv         the whole catalogue as cabletv/library.tsv
 
 Credentials come from the environment (EE3_USERNAME / EE3_PASSWORD), or from
@@ -24,10 +24,12 @@ tracked and the box is a git checkout.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
 import sys
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -43,11 +45,15 @@ LOGIN_URL = f"{BASE_URL}/login"
 HOST = os.environ.get("EE3_HOST", "0.0.0.0")
 PORT = int(os.environ.get("EE3_PORT", "1209"))
 
-# How long /resolve is willing to sit there waiting for the site to cache a
-# torrent before giving up. A TV is watching, so this is a real deadline, not
-# a safety net: cabletv.lua shows "RESOLVING" for exactly this long.
-RESOLVE_TIMEOUT = float(os.environ.get("EE3_RESOLVE_TIMEOUT", "90"))
-RESOLVE_POLL = float(os.environ.get("EE3_RESOLVE_POLL", "3"))
+# How long /resolve is willing to spend before giving up. A TV is watching, so
+# this is a real deadline, not a safety net: cabletv.lua shows "RESOLVING" for
+# exactly this long.
+#
+# It used to be 90s because resolving meant asking ee3 to cache the torrent and
+# polling until it had. It does not any more — /resolve now only asks torrentio
+# for an infoHash and hands back a magnet, which is two GETs, and the *Pi* does
+# the downloading. Seconds, not minutes.
+RESOLVE_TIMEOUT = float(os.environ.get("EE3_RESOLVE_TIMEOUT", "25"))
 
 # Pi 3B+ playback envelope (constraint 11): H.264 only, 1080p max. A 2160p
 # HEVC remux is not "better quality" on this box, it is a slideshow — so the
@@ -234,9 +240,11 @@ async def lifespan(_app: FastAPI):
         follow_redirects=False,
     )
     # torrentio is a different origin; it must not see the ee3 cookie, and it
-    # is slow enough to want its own timeout.
+    # is slow enough to want its own timeout. BROWSER_HEADERS is load-bearing
+    # here, not cosmetic — see STRICT_FILTER: no User-Agent means a Cloudflare
+    # 403 that surfaces as a JSON parse error.
     torrentio_client = httpx.AsyncClient(
-        headers=BROWSER_HEADERS, timeout=30.0, follow_redirects=True,
+        headers=BROWSER_HEADERS, timeout=RESOLVE_TIMEOUT, follow_redirects=True,
     )
     # Startup login is best-effort. The LXC may boot before the network is up,
     # and a daemon that refuses to start is harder to debug than one that says
@@ -251,6 +259,90 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="ee3 API daemon", lifespan=lifespan)
+
+
+# --- torrentio ----------------------------------------------------------------
+TORRENTIO = os.environ.get("EE3_TORRENTIO", "https://torrentio.strem.fun").rstrip("/")
+
+# The filter chain, verbatim. `sort=seeders` first so that the single stream
+# `limit=1` keeps is the best-seeded one — on a Pi pulling its own pieces, seed
+# count is the difference between a film and a slideshow. The qualityfilter
+# names everything to THROW AWAY, which is why 1080p is absent from it: 4k and
+# 720p/480p are excluded by size and by constraint 11, cam/scr are unwatchable,
+# and brremux/hdrall/dolbyvision/threed are all things a 3B+ cannot decode.
+#
+# Two traps live in this URL, both verified against the live service:
+#   * The pipes stay LITERAL. httpx passes them through untouched and torrentio
+#     wants them that way; percent-encoding them to %7C also works, so neither
+#     is the thing that breaks.
+#   * torrentio sits behind Cloudflare and answers a request with no User-Agent
+#     with a 403 HTML page — which .json() then reports as a parse error, so it
+#     reads like a torrentio outage rather than a blocked request. BROWSER_HEADERS
+#     on torrentio_client is what stops that; never give that client bare headers.
+STRICT_FILTER = ("sort=seeders|qualityfilter=4k,720p,480p,scr,cam,brremux,"
+                 "hdrall,dolbyvision,dolbyvisionwithhdr,threed|limit=1")
+# Rare and old titles often have nothing at all once the strict filter has run,
+# and answering "no streams" for a film that has a perfectly good 720p rip is a
+# worse outcome than playing the 720p rip. pick_stream still enforces the parts
+# that are about what the box can DECODE, so this relaxes taste, not capability.
+RELAXED_FILTER = "sort=seeders|limit=1"
+
+# Both engines the Pi can run (peerflix, webtorrent) have DHT on, so these are
+# only there to shorten the cold start — a magnet with no tracker has to find
+# its first peer through the DHT alone, which on a domestic line is the slowest
+# part of pressing OK. opentrackr is the one named in the spec; the rest are
+# the standard public UDP trackers.
+TRACKERS = (
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+)
+
+# ee3 record id -> IMDb id. Deliberately loose: `tt` plus at least seven
+# digits, because IMDb has run past eight and will keep going.
+_TT = re.compile(r"tt\d{7,}")
+
+
+def _torrentio_url(filt: str, imdb_id: str) -> str:
+    return "%s/%s/stream/movie/%s.json" % (TORRENTIO, filt, imdb_id)
+
+
+async def _torrentio(filt: str, imdb_id: str) -> list:
+    """One torrentio query -> its streams list. An empty list is a normal
+    answer (that is what the fallback exists for), not an error."""
+    url = _torrentio_url(filt, imdb_id)
+    try:
+        r = await torrentio_client.get(url)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"torrentio unreachable: {e}")
+    if r.status_code == 404:
+        return []                       # torrentio's "nothing for this id"
+    if r.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail="torrentio said %d (a 403 here means the request lost its "
+                   "User-Agent)" % r.status_code,
+        )
+    try:
+        return (r.json() or {}).get("streams") or []
+    except ValueError:
+        raise HTTPException(status_code=502, detail="torrentio sent non-JSON")
+
+
+def _magnet(info_hash: str, filename: Optional[str]) -> str:
+    """infoHash -> a magnet URI peerflix/webtorrent can open.
+
+    `dn` is percent-encoded because a release filename is full of spaces and
+    the odd `&`; the trackers are left literal, which every magnet parser in
+    use accepts and which keeps the URI readable in a log.
+    """
+    out = "magnet:?xt=urn:btih:" + info_hash
+    if filename:
+        out += "&dn=" + urllib.parse.quote(filename, safe="")
+    for tr in TRACKERS:
+        out += "&tr=" + tr
+    return out
 
 
 # --- stream selection --------------------------------------------------------
@@ -323,6 +415,8 @@ async def health():
         "credentials_set": bool(USERNAME and PASSWORD),
         "base_url": BASE_URL,
         "max_height": MAX_HEIGHT,
+        "torrentio": TORRENTIO,
+        "resolves_to": "magnet",
     }
 
 
@@ -341,83 +435,176 @@ async def movies(request: Request):
     return _json_or_502(r, "/movies")
 
 
+async def imdb_id_for(movie_id: str) -> str:
+    """ee3 record id -> IMDb tt-id.
+
+    This hop exists because torrentio is indexed by IMDb id and ee3 is not.
+    ee3's catalogue rows carry no imdb_id at all — as of July 2026 `tmdb_data`
+    holds only title/release_date/poster_path/backdrop_path/vote_average/
+    vote_count/overview/runtime — so the id has to come from somewhere else.
+
+    `GET /api/torrent/{id}` is that somewhere: ee3 builds its own torrentio URL
+    for the title, and that URL ends in `/stream/movie/tt#######.json`. Pulling
+    the tt-id back out of it is not a hack so much as reading ee3's own answer
+    to the same question. The explicit fields are checked first anyway, so the
+    day ee3 starts sending an imdb_id this quietly gets a hop shorter.
+    """
+    info = _json_or_502(await api("GET", f"/api/torrent/{movie_id}"), "torrent lookup")
+
+    for holder in (info, info.get("tmdb_data") or {}, info.get("external_ids") or {}):
+        if not isinstance(holder, dict):
+            continue
+        for key in ("imdb_id", "imdbId", "imdb"):
+            v = holder.get(key)
+            if isinstance(v, str) and _TT.fullmatch(v.strip()):
+                return v.strip()
+
+    m = _TT.search(info.get("torrentioUrl") or "")
+    if m:
+        return m.group(0)
+    # Last resort: the id is in that document somewhere, under a key nobody has
+    # written down yet. Cheaper than being wrong about the shape of the JSON.
+    m = _TT.search(json.dumps(info))
+    if m:
+        return m.group(0)
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"no IMDb id for {movie_id} — ee3 returned no torrentioUrl for it",
+    )
+
+
 @app.get("/resolve/{movie_id}")
 async def resolve(
     movie_id: str,
     max_height: int = Query(MAX_HEIGHT),
     allow_hevc: bool = Query(False),
     max_size_gb: float = Query(MAX_SIZE_GB),
-    wait: float = Query(RESOLVE_TIMEOUT),
+    imdb_id: Optional[str] = Query(None, description="skip the ee3 lookup"),
 ):
-    """Movie id -> a URL mpv can open.
+    """ee3 movie id -> a magnet URI the Pi streams for itself.
 
-    Three hops, which is why the original one-shot PATCH could never work:
-      1. GET  /api/torrent/{id}   -> {torrentioUrl}
-      2. GET  torrentioUrl        -> {streams:[{infoHash,fileIdx,...}]}
-      3. POST /api/torrent/{id}   -> {downloadUrl} once the site has cached it
+    Two hops now, and neither of them downloads anything:
+      1. ee3 record id -> IMDb id            (imdb_id_for, one ee3 call)
+      2. torrentio, strict then relaxed      -> infoHash -> magnet
 
-    Step 3 answers {message: "..."} while caching is still in progress, so it
-    is polled until `wait` seconds are up.
+    What this deliberately no longer does is ask ee3 to cache the torrent and
+    poll `POST /api/torrent/{id}` for a `downloadUrl`. That put a whole film's
+    worth of transfer on the LXC, made the viewer wait out someone else's
+    caching queue, and expired. The Pi now takes the magnet and pulls its own
+    pieces, which is also what makes seeking work: peerflix/webtorrent fetch
+    on demand, so jumping forward fetches the pieces under the new position
+    instead of waiting for the ones before it.
+
+    Returns {"url": "magnet:?xt=urn:btih:..."} — or, if torrentio offered a
+    plain HTTP stream instead of an infoHash, that URL directly. ee3resolve.py
+    reads nothing but `url`; everything else here is for a human with curl.
     """
-    r = await api("GET", f"/api/torrent/{movie_id}")
-    info = _json_or_502(r, "torrent lookup")
-    torrentio_url = info.get("torrentioUrl")
-    if not torrentio_url:
-        raise HTTPException(status_code=404, detail=f"no torrentioUrl for {movie_id}")
+    imdb = (imdb_id or "").strip() or await imdb_id_for(movie_id)
+    if not _TT.fullmatch(imdb):
+        raise HTTPException(status_code=400, detail=f"not an IMDb id: {imdb!r}")
 
-    try:
-        tr = await torrentio_client.get(torrentio_url)
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"torrentio unreachable: {e}")
-    if tr.status_code != 200:
-        raise HTTPException(
-            status_code=502, detail=f"torrentio said {tr.status_code}")
-    try:
-        streams = (tr.json() or {}).get("streams") or []
-    except ValueError:
-        raise HTTPException(status_code=502, detail="torrentio sent non-JSON")
-    if not streams:
-        raise HTTPException(status_code=404, detail="no streams available")
+    offered, undecodable = 0, None
+    for label, filt in (("strict", STRICT_FILTER), ("relaxed", RELAXED_FILTER)):
+        streams = await _torrentio(filt, imdb)
+        if not streams:
+            continue
+        offered += len(streams)
 
-    chosen = pick_stream(streams, max_height, allow_hevc, max_size_gb)
-    if not chosen:
+        # torrentio occasionally serves a ready-made HTTP stream rather than an
+        # infoHash (debrid-backed entries do this). It needs no torrent client
+        # at all, so it wins outright when it is on offer.
+        direct = next((s for s in streams
+                       if s.get("url") and not s.get("infoHash")), None)
+        if direct:
+            log.info("resolve %s (%s): direct url via %s", movie_id, imdb, label)
+            return {"ok": True, "url": direct["url"], "kind": "url",
+                    "imdb_id": imdb, "filter": label,
+                    "stream": {"title": (direct.get("title") or "").split("\n")[0]}}
+
+        chosen = pick_stream(streams, max_height, allow_hevc, max_size_gb)
+        if not chosen:
+            # Keep the first thing we had to turn down, so the eventual error
+            # can say WHAT was wrong with it rather than just "nothing found".
+            undecodable = undecodable or _describe(streams[0])
+            continue
+
+        magnet = _magnet(chosen["infoHash"], chosen["filename"])
+        log.info("resolve %s (%s): %s %dp %s seeders=%d via %s", movie_id, imdb,
+                 chosen["infoHash"][:8], chosen["height"],
+                 chosen["filename"] or "?", chosen["seeders"], label)
+        return {"ok": True, "url": magnet, "kind": "magnet",
+                "imdb_id": imdb, "filter": label, "stream": chosen}
+
+    if undecodable:
         raise HTTPException(
             status_code=409,
-            detail="no stream this box can decode (need H.264 <=%dp; %d offered)"
-                   % (max_height, len(streams)),
+            detail="found %s but this box cannot decode it (needs H.264 <=%dp)"
+                   % (undecodable["title"] or "a release", max_height),
         )
-
-    body = {
-        "infoHash": chosen["infoHash"],
-        "fileIdx": chosen["fileIdx"],
-        "movieId": movie_id,
-        "filename": chosen["filename"],
-    }
-    headers = {"referer": f"{BASE_URL}/movies/{movie_id}"}
-
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(0.0, wait)
-    last_msg = ""
-    while True:
-        r = await api("POST", f"/api/torrent/{movie_id}", json=body, headers=headers)
-        data = _json_or_502(r, "stream resolve")
-        url = data.get("downloadUrl")
-        if url:
-            return {
-                "ok": True,
-                "url": url,
-                "videoLinkId": data.get("videoLinkId"),
-                "stream": chosen,
-            }
-        last_msg = data.get("message") or "still caching"
-        if loop.time() >= deadline:
-            raise HTTPException(status_code=504, detail=f"timed out: {last_msg}")
-        await asyncio.sleep(RESOLVE_POLL)
+    raise HTTPException(
+        status_code=404,
+        detail=f"torrentio has nothing for {imdb} ({offered} streams offered)",
+    )
 
 
 def _clean(s) -> str:
     """library.tsv is tab-separated with no quoting, so tabs must not survive."""
     return re.sub(r"\s+", " ", str(s or "")).strip()
+
+
+# TMDB serves images off this host with no API key and no auth, which is the
+# only reason a poster url can live in a file the Pi reads. w342 is the
+# smallest size that still looks like a poster in the 993 detail panel.
+TMDB_IMG = os.environ.get("EE3_TMDB_IMG", "https://image.tmdb.org/t/p/w342")
+
+# NOTE: as of July 2026 ee3's /api/movies returns tmdb_data with only
+# poster_path, backdrop_path, title, release_date, vote_average and runtime —
+# no overview. So this column ships empty and 993 prints NO SYNOPSIS. It is
+# written this way because the day ee3 (or whatever replaces the enrichment)
+# starts sending one, the panel fills in with no further work.
+#
+# A synopsis is free text on a line-oriented file: newlines and tabs are
+# already gone via _clean, and this is what stops one film from owning the
+# whole panel. Cut at a sentence end when there is one nearby.
+OVERVIEW_MAX = int(os.environ.get("EE3_OVERVIEW_MAX", "480"))
+
+
+def _overview(tmdb: dict) -> str:
+    text = _clean(tmdb.get("overview"))
+    if len(text) <= OVERVIEW_MAX:
+        return text
+    cut = text[:OVERVIEW_MAX]
+    stop = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if stop > OVERVIEW_MAX // 2:
+        return cut[:stop + 1]
+    return cut.rsplit(" ", 1)[0] + "..."
+
+
+def _row(it: dict) -> Optional[str]:
+    """One catalogue item -> one library.tsv line, or None if unusable.
+
+    Eight columns now, and the four the player has always read come first:
+    an older cabletv.lua reading this file still gets exactly what it did
+    before, and a newer one gets a detail panel.
+    """
+    tmdb = it.get("tmdb_data") or {}
+    title = _clean(tmdb.get("title") or it.get("title"))
+    if not title or not it.get("id"):
+        return None
+    runtime = tmdb.get("runtime") or 0
+    rating = tmdb.get("vote_average") or 0
+    poster = _clean(tmdb.get("poster_path"))
+    return "\t".join((
+        "movie",
+        title,
+        _clean(tmdb.get("release_date"))[:4],
+        "ee3:%s" % it["id"],
+        str(int(runtime)) if runtime else "",
+        ("%.1f" % float(rating)) if rating else "",
+        (TMDB_IMG + poster) if poster.startswith("/") else poster,
+        _overview(tmdb),
+    ))
 
 
 @app.get("/library.tsv", response_class=PlainTextResponse)
@@ -433,6 +620,11 @@ async def library_tsv(
     playback and would be stale by the time anyone pressed OK. cabletv.lua
     resolves the id through this daemon at play time instead.
 
+    The four columns after it (runtime, rating, poster, overview) are what
+    993's detail panel draws. They are shipped in the same file on purpose:
+    the panel has to redraw on every cursor move, and a per-title HTTP call
+    from a Pi behind a d-pad would make scrolling feel broken.
+
         curl -s http://192.168.1.16:1209/library.tsv > cabletv/library.tsv
     """
     rows, page = [], 1
@@ -444,12 +636,9 @@ async def library_tsv(
         if not items:
             break
         for it in items:
-            tmdb = it.get("tmdb_data") or {}
-            title = _clean(tmdb.get("title") or it.get("title"))
-            if not title or not it.get("id"):
-                continue
-            year = _clean(tmdb.get("release_date"))[:4]
-            rows.append("movie\t%s\t%s\tee3:%s" % (title, year, it["id"]))
+            row = _row(it)
+            if row:
+                rows.append(row)
             if len(rows) >= limit:
                 break
         if page >= int(data.get("totalPages") or page):
@@ -460,7 +649,10 @@ async def library_tsv(
         "# nothing-htpc on-demand library index.",
         "#",
         "# GENERATED by server/movieapi.py (GET /library.tsv) — do not hand-edit,",
-        "# regenerate. Columns: kind <TAB> title <TAB> year <TAB> url",
+        "# regenerate. Columns:",
+        "#   kind <TAB> title <TAB> year <TAB> url <TAB>",
+        "#   runtime-minutes <TAB> rating <TAB> poster-url <TAB> overview",
+        "# The last four may be empty; the first four never are.",
         "#",
         "# The url column is `ee3:<id>`, not a playable URL. ee3 mints a link per",
         "# playback, so a baked-in URL would be dead by the time the remote asked",

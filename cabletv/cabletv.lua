@@ -5,7 +5,8 @@
 --   * X opens a keypad grid; digits tune directly (3 digits = instant)
 --   * banner: number + name, top-left, pixel font, fades after 5 s
 --   * animated static on dead channels and while buffering
---   * teletext: 991 = channel guide, 992/993 = RSS news pages
+--   * teletext: 991 news, 992 weather, 993/994 the on-demand library,
+--     999 the channel guide
 -- No volume control on purpose - that's the TV's job.
 ------------------------------------------------------------------------------
 
@@ -21,6 +22,28 @@ local LIBRARY_FILE    = DIR .. "/library.tsv"
 -- This turns one into a URL, at play time, by asking the daemon on the LXC.
 local RESOLVER        = DIR .. "/ee3resolve.py"
 local RESOLVE_SECONDS = tonumber(os.getenv("CABLETV_RESOLVE_SECONDS")) or 130
+-- /resolve hands back a `magnet:` URI and the Pi does its own downloading.
+-- torrentstream.sh runs peerflix/webtorrent in SERVER mode and this script
+-- loadfiles the local http url into the mpv it is already running in - never
+-- `--mpv`, which would spawn a second player on top of the cable UI.
+local TORRENT_SH      = DIR .. "/torrentstream.sh"
+local TORRENT_PORT    = tonumber(os.getenv("CABLETV_TORRENT_PORT")) or 8888
+-- How long a magnet gets to find peers and buffer its first pieces before the
+-- box gives up. Longer than a resolve: this is a real download over a domestic
+-- line, and a cold, poorly-seeded torrent genuinely takes a minute.
+local TORRENT_SECONDS = tonumber(os.getenv("CABLETV_TORRENT_SECONDS")) or 150
+local TORRENT_POLL    = 2           -- seconds between "is it servable yet"
+-- Films get transport controls; channels deliberately do not (constraint 3 -
+-- the player has cable box buttons only). Seeking live TV means nothing, and
+-- pausing it just desyncs the stream, so both are gated on `ondemand`.
+local SEEK_STEP       = tonumber(os.getenv("CABLETV_SEEK_STEP")) or 30
+-- library.tsv is a CACHE of the daemon's /library.tsv, not hand-maintained
+-- state (unlike channels.m3u). Opening 993 with no cache fetches it and shows
+-- BUFFERING; opening one older than the TTL shows the cached page instantly
+-- and refreshes behind it, because a catalogue you can already read beats a
+-- fresher one you have to wait for.
+local LIBRARY_SECONDS = tonumber(os.getenv("CABLETV_LIBRARY_SECONDS")) or 90
+local LIBRARY_TTL     = tonumber(os.getenv("CABLETV_LIBRARY_TTL")) or 21600  -- 6h
 local FONT            = "Press Start 2P"
 local BANNER_SECONDS  = 5
 -- Overridable because static is uncompressed: every tick hands mpv another
@@ -35,6 +58,10 @@ local DIGIT_TIMEOUT   = 2.0         -- seconds after last digit before tuning
 local RSS_CACHE_SECS  = 300
 local WX_CACHE_SECS   = 900         -- weather moves slower than news
 local LINES_PER_PAGE  = 11          -- rows per subpage on the list pages
+-- One word for "this page is waiting on the network", used by every page that
+-- fetches: news, weather and the library. Same word the picture uses when a
+-- stream is filling its cache, so it means the same thing everywhere.
+local LOADING_TEXT    = "BUFFERING . . ."
 -- 991 is paginated by feed, not by row count: one language per subpage, every
 -- headline on exactly one line. 15 rows is what fits under the section header
 -- without crowding the fastext footer.
@@ -96,8 +123,16 @@ local tt = nil             -- {no=, sub=, lines=|pages=|wx=, cur=, gen=} when ac
 local tt_gen = 0           -- bumped per open; an async reply for an old gen is dropped
 local rss_cache = {}       -- key -> {t=, pages=}
 local wx_cache = nil       -- {t=, wx=}
-local library = nil        -- kind -> sorted list of {title=, year=, url=}
+local library = nil        -- kind -> sorted list of entries (see load_library)
+local library_urls = 0     -- how many of those have something to play
+local library_busy = false -- a /library.tsv fetch is in flight
+local library_seq = 0      -- same generation trick as resolve_seq, for the fetch
 local ondemand = nil       -- the library entry currently playing, if any
+local resolving = nil      -- page number a resolve was started from, while it runs
+-- The torrent engine behind an on-demand film: {id=, port=, timer=} while one
+-- is running. `id` is the async subprocess handle, which is what kills it -
+-- an engine nobody stopped goes on seeding a film nobody is watching.
+local torrent = nil
 -- Bumped whenever the box decides to watch something else. A resolve can take
 -- a minute, and a reply that arrives after the viewer has zapped away must not
 -- yank them back - the callback compares against this and drops itself.
@@ -115,13 +150,21 @@ local C_DIM    = "&H303030&"   -- grid rules on 992; a hair above the background
 -- overlays ---------------------------------------------------------------------
 local ov_banner  = mp.create_osd_overlay("ass-events")
 local ov_keypad  = mp.create_osd_overlay("ass-events")
+-- The on-demand transport bar. Created BEFORE ov_tt and after ov_banner, and
+-- the order is the z order (constraint 20): a teletext page still covers this,
+-- which is right - the page is opaque and you are not scrubbing while reading
+-- it. It never coexists with the banner; whichever shows hides the other.
+local ov_trans   = mp.create_osd_overlay("ass-events")
 local ov_tt      = mp.create_osd_overlay("ass-events")
 local OSD_W, OSD_H = 1280, 720
-for _, ov in pairs({ov_banner, ov_keypad, ov_tt}) do
+for _, ov in pairs({ov_banner, ov_keypad, ov_trans, ov_tt}) do
   ov.res_x, ov.res_y = OSD_W, OSD_H
 end
 -- Only the banner needs measuring: it is the one box whose size depends on
--- how long a channel name is. The keypad and teletext know their own.
+-- how long a channel name is. The keypad and teletext know their own, and the
+-- transport bar works its own out arithmetically - it draws two blocks at
+-- opposite ends of the screen, and one bounding box round the pair would be
+-- the whole screen, which is not a hole you can punch in the static.
 ov_banner.compute_bounds = true
 
 -- Every key handler and timer callback goes through this. An argument-count
@@ -274,9 +317,9 @@ local function static_tiles()
   return tiles
 end
 
--- Forward declarations: both of these fill their own hole in the static, so
--- they have to be redrawn whenever the static comes and goes.
-local render_banner, keypad_render
+-- Forward declarations: all three of these fill their own hole in the static,
+-- so they have to be redrawn whenever the static comes and goes.
+local render_banner, keypad_render, render_trans
 
 local function static_clear_ids(from)
   for i = from, static.ntiles - 1 do
@@ -348,6 +391,7 @@ local function static_on()
     static.timer:resume()
   end
   render_banner()      -- gains its black plate
+  render_trans()
   if keypad then keypad_render() end
   static_tick()
 end
@@ -359,6 +403,7 @@ local function static_off()
   static_clear_ids(0)
   static.ntiles, static.dirty = 0, true
   render_banner()      -- drops the plate, back to bare text over the picture
+  render_trans()
   if keypad then keypad_render() end
 end
 
@@ -407,12 +452,17 @@ render_banner = function()
   set_box("banner", plate)
 end
 
-local function show_banner(no, name)
+-- `sticky` keeps it up until somebody else shows a banner instead of fading
+-- after 5 s. Exactly one thing uses it: a resolve can run for a minute, and a
+-- screen of silent static with no word on it looks like a broken box. Every
+-- exit from a resolve shows a normal banner, which re-arms the fade.
+local function show_banner(no, name, sticky)
   local num = tostring(no)
   if #num < 2 then num = "0" .. num end
   banner.num, banner.name, banner.shown = num, name or "", true
   render_banner()
-  if banner_timer then banner_timer:kill() end
+  if banner_timer then banner_timer:kill(); banner_timer = nil end
+  if sticky then return end
   banner_timer = mp.add_timeout(BANNER_SECONDS, guard(function()
     banner.shown = false
     render_banner()
@@ -486,33 +536,78 @@ local function ass_escape(s)
   return (s:gsub("{", "("):gsub("}", ")"))
 end
 
--- library.tsv -> library[kind] = sorted { {title=, year=, url=}, ... }
--- Read once, lazily, on the first visit to 993/994. Reading it at boot would
--- cost a file read on every zap into cable mode for a page most sessions
--- never open.
+local function trim(s)
+  return (s or ""):match("^%s*(.-)%s*$")
+end
+
+-- Split on tabs KEEPING empty fields. gmatch("[^\t]+") drops them, which on a
+-- row with no year would shift the url into the year column and every column
+-- after it - and the file is full of rows with something missing.
+local function split_tabs(line)
+  local out, pos = {}, 1
+  while true do
+    local i = line:find("\t", pos, true)
+    if not i then out[#out + 1] = line:sub(pos); return out end
+    out[#out + 1] = line:sub(pos, i - 1)
+    pos = i + 1
+  end
+end
+
+-- library.tsv -> library[kind] = sorted list of
+--   { title=, year=, url=, runtime=(minutes), rating=, poster=, plot= }
+-- Read lazily, on the first visit to 993/994. Reading it at boot would cost a
+-- file read on every zap into cable mode for a page most sessions never open.
+--
+-- Columns 5-8 are what the detail panel draws and they arrive in this same
+-- file on purpose: the panel redraws on every cursor move, and asking the
+-- daemon per title would put a network round trip under the d-pad.
+-- They are all optional - a four-column file written before the panel existed
+-- still loads, it just has nothing to show on the right.
 local function load_library()
   if library then return end
-  library = { movie = {}, show = {} }
+  library, library_urls = { movie = {}, show = {} }, 0
   local f = io.open(LIBRARY_FILE, "r")
   if not f then
     mp.msg.warn("library.tsv not found at " .. LIBRARY_FILE)
     return
   end
   for line in f:lines() do
+    line = line:gsub("\r$", "")
     if line ~= "" and not line:match("^%s*#") then
-      local kind, title, year, url = line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t?(.*)$")
-      if kind and library[kind] and title ~= "" then
+      local c = split_tabs(line)
+      local kind, title = trim(c[1]), trim(c[2])
+      if library[kind] and title ~= "" then
         local t = library[kind]
-        t[#t + 1] = { title = title,
-                      year  = (year or ""):match("^%s*(.-)%s*$"),
-                      url   = (url or ""):match("^%s*(.-)%s*$") }
+        local url = trim(c[4])
+        if url ~= "" then library_urls = library_urls + 1 end
+        t[#t + 1] = { title   = title,
+                      year    = trim(c[3]),
+                      url     = url,
+                      runtime = tonumber(trim(c[5])) or 0,
+                      rating  = trim(c[6]),
+                      poster  = trim(c[7]),
+                      plot    = trim(c[8]) }
       end
     end
   end
   f:close()
-  for _, t in pairs(library) do
-    table.sort(t, function(a, b) return a.title:lower() < b.title:lower() end)
-  end
+  -- FILE ORDER IS THE ORDER ON SCREEN. Not sorted here: the daemon sorts by
+  -- release date, newest first, so 993 opens on what has just arrived - which
+  -- is what a video shop's front rack was for. Sorting by title would throw
+  -- that away and put a hundred films starting with "A" in front of it.
+end
+
+-- nil when the cache is good, otherwise why it is not:
+--   "missing"  no file, no rows, or rows with nothing playable in them
+--              (the placeholder shipped in the repo lands here)
+--   "stale"    readable, but older than the TTL
+local function library_needs_sync()
+  load_library()
+  if library_urls == 0 then return "missing" end
+  local st = utils.file_info(LIBRARY_FILE)
+  if not (st and st.is_file and (st.size or 0) > 0) then return "missing" end
+  if (os.time() - (st.mtime or 0)) > LIBRARY_TTL then return "stale" end
+  return nil
 end
 
 -- Every text row on a page goes through here, so there is exactly one ASS
@@ -656,7 +751,7 @@ local WX_ROW_H   = 148
 local function tt_wx_body(ev)
   local wx = tt.wx
   if not wx then
-    txt(ev, 7, 52, 190, 18, C_GRAY, "LOADING . . .")
+    txt(ev, 7, 52, 190, 18, C_GRAY, LOADING_TEXT)
     return
   end
   if wx.err then
@@ -694,6 +789,229 @@ local function tt_wx_body(ev)
   end
 end
 
+------------------------------------------------------------------ transport ---
+-- The on-demand transport bar: the film's title top-left, in the same green
+-- pixel font and at the same coordinates a channel's banner uses, and a
+-- progress bar along the bottom.
+--
+-- This is the one place the "cable box buttons only" rule bends (constraint 3),
+-- and it bends only for films. A channel is live: there is nothing to seek to,
+-- and pausing it just desyncs the stream. So every control here is gated on
+-- `ondemand` being set, mpv's own OSC and default bindings stay off, and none
+-- of this is reachable from a channel.
+local TRANS_X0, TRANS_X1 = 52, 1228
+local TRANS_BAR_Y  = 646
+local TRANS_BAR_H  = 12
+local TRANS_COLS   = 42        -- title, cut to fit 1176px at fs34
+-- Press Start 2P advances 0.73em per glyph. Same constant the teletext column
+-- counts are derived from; it is what lets a box be computed instead of measured.
+local GLYPH_ADV    = 0.73
+
+local trans = { shown = false, fade = nil, tick = nil }
+local trans_show, trans_hide
+
+local function hms(t)
+  t = math.max(0, math.floor(tonumber(t) or 0))
+  local h = math.floor(t / 3600)
+  if h > 0 then
+    return ("%d:%02d:%02d"):format(h, math.floor(t / 60) % 60, t % 60)
+  end
+  return ("%d:%02d"):format(math.floor(t / 60), t % 60)
+end
+
+local function frac(v, total)
+  if not (v and total and total > 0) then return nil end
+  return math.min(1, math.max(0, v / total))
+end
+
+render_trans = function()
+  if not (trans.shown and ondemand) then
+    ov_trans.data = ""
+    ov_trans:update()
+    set_box("trans", nil)
+    set_box("transbar", nil)
+    return
+  end
+
+  local pos    = mp.get_property_number("time-pos", 0) or 0
+  local dur    = mp.get_property_number("duration", 0) or 0
+  local paused = mp.get_property_bool("pause")
+  -- Absolute playback time the demuxer has reached, NOT an amount of time
+  -- ahead. On a torrent this is the honest answer to "why did it stop": you
+  -- can watch the buffer edge fail to keep away from the playhead.
+  local cached = mp.get_property_number("demuxer-cache-time", nil)
+
+  local title = ass_escape(usub(ondemand.title:upper(), TRANS_COLS))
+  local label = (paused and "PAUSED" or "PLAY") .. "  " ..
+                ((dur > 0) and (hms(pos) .. " / " .. hms(dur)) or hms(pos))
+
+  -- Boxes first: the static is opaque and sits above the ASS overlays, so
+  -- these are both the hole it leaves and the plate that fills it.
+  local tw = math.max(ulen(title) * 34, ulen(label) * 20) * GLYPH_ADV
+  local tbox = { x0 = TRANS_X0 - 18, y0 = 20,
+                 x1 = math.min(OSD_W, TRANS_X0 + tw + 8), y1 = 126 }
+  local bbox = { x0 = TRANS_X0 - 8, y0 = TRANS_BAR_Y - 10,
+                 x1 = math.min(OSD_W, TRANS_X1 + 8),
+                 y1 = TRANS_BAR_Y + TRANS_BAR_H + 10 }
+
+  local ev = {}
+  if static.on then
+    draw(ev, C_BLACK, ass_rect(tbox.x0, tbox.y0, tbox.x1, tbox.y1))
+    draw(ev, C_BLACK, ass_rect(bbox.x0, bbox.y0, bbox.x1, bbox.y1))
+  end
+
+  local y1 = TRANS_BAR_Y + TRANS_BAR_H
+  draw(ev, C_DIM, ass_rect(TRANS_X0, TRANS_BAR_Y, TRANS_X1, y1))
+  local w = TRANS_X1 - TRANS_X0
+  local cf = frac(cached, dur)
+  if cf then
+    draw(ev, C_GRAY, ass_rect(TRANS_X0, TRANS_BAR_Y, TRANS_X0 + w * cf, y1))
+  end
+  local pf = frac(pos, dur)
+  if pf then
+    draw(ev, C_GREEN, ass_rect(TRANS_X0, TRANS_BAR_Y, TRANS_X0 + w * pf, y1))
+  end
+
+  txt(ev, 7, TRANS_X0, 42, 34, C_GREEN, title)
+  txt(ev, 7, TRANS_X0, 96, 20, C_GREEN, label)
+
+  ov_trans.data = table.concat(ev, "\n")
+  ov_trans:update()
+  set_box("trans", static.on and tbox or nil)
+  set_box("transbar", static.on and bbox or nil)
+end
+
+trans_show = function()
+  if not ondemand then return end
+  -- One thing owns the top-left corner. The banner and this would otherwise
+  -- print a channel name straight through a film title.
+  if banner.shown then
+    banner.shown = false
+    render_banner()
+  end
+  trans.shown = true
+  render_trans()
+  if trans.tick then trans.tick:kill() end
+  trans.tick = mp.add_periodic_timer(1, guard(function() render_trans() end))
+  if trans.fade then trans.fade:kill(); trans.fade = nil end
+  -- While paused it stays up. A paused film with nothing on screen is
+  -- indistinguishable from a frozen box, which is the failure this whole
+  -- project keeps designing against.
+  if mp.get_property_bool("pause") then return end
+  trans.fade = mp.add_timeout(BANNER_SECONDS, guard(function() trans_hide() end))
+end
+
+trans_hide = function()
+  trans.shown = false
+  if trans.fade then trans.fade:kill(); trans.fade = nil end
+  if trans.tick then trans.tick:kill(); trans.tick = nil end
+  render_trans()
+end
+
+------------------------------------------------------- 993/994 layout ---------
+-- The library pages split the screen: the list keeps the left side, the detail
+-- panel the right. Press Start 2P advances 0.73em per glyph, so at fs18 a
+-- 44-column row is 634px and stops short of the divider at 700. Every column
+-- count here is that arithmetic, not a guess - the font is fixed-width, so a
+-- row that fits on paper fits on the TV.
+local LIB_ROWS    = 12              -- rows per subpage (11 elsewhere)
+local LIB_Y0      = 168
+local LIB_PITCH   = 40
+local LIB_FS      = 18
+local LIB_COLS    = 44
+local PANEL_X     = 700             -- divider
+local PANEL_R     = 1249            -- same right margin the header and footer use
+-- The poster is not drawn yet: this rectangle is reserved for it, and nothing
+-- else may claim those pixels. 2:3 is the TMDB aspect, so a w342 jpeg scaled
+-- into it needs no cropping when the second pass wires it up.
+local POSTER_X, POSTER_Y = 724, 132
+local POSTER_W, POSTER_H = 176, 264
+local META_X      = POSTER_X + POSTER_W + 22
+local META_COLS   = 24              -- (PANEL_R - META_X) / (0.73 * 18)
+local PLOT_COLS   = 51              -- (PANEL_R - POSTER_X) / (0.73 * 14)
+local PLOT_LINES  = 9
+
+-- Wrap to `width` CODEPOINTS, not bytes (constraint 5): plot text is whatever
+-- the catalogue holds. Returns at most maxlines rows, the last ellipsised if
+-- anything was dropped.
+local function uwrap(text, width, maxlines)
+  width = math.max(8, width)
+  local out, line = {}, ""
+  for word in text:gmatch("%S+") do
+    while ulen(word) > width do          -- one absurd word: cut it up
+      if line ~= "" then out[#out + 1] = line; line = "" end
+      local head = usub(word, width)
+      out[#out + 1] = head
+      word = word:sub(#head + 1)
+    end
+    local try = (line == "") and word or (line .. " " .. word)
+    if ulen(try) <= width then
+      line = try
+    else
+      out[#out + 1] = line
+      line = word
+    end
+  end
+  if line ~= "" then out[#out + 1] = line end
+  if maxlines and #out > maxlines then
+    for i = #out, maxlines + 1, -1 do out[i] = nil end
+    out[maxlines] = usub(out[maxlines], width - 3) .. "..."
+  end
+  return out
+end
+
+local function lib_runtime(mins)
+  if not mins or mins <= 0 then return "" end
+  if mins < 60 then return ("%dM"):format(mins) end
+  return ("%dH %02dM"):format(math.floor(mins / 60), mins % 60)
+end
+
+-- The right-hand panel. Called on every cursor move, so everything it draws
+-- comes off the entry already in memory - no file read, no subprocess, no
+-- network. That is the whole reason the metadata rides along in library.tsv.
+local function tt_lib_panel(ev, it)
+  draw(ev, C_DIM, ass_rect(PANEL_X, 118, PANEL_X + 2, 660))
+  if not it then return end
+
+  local x1, y1 = POSTER_X + POSTER_W, POSTER_Y + POSTER_H
+  -- Frame as four rules rather than a filled box: the middle stays black, so
+  -- an image dropped in later covers exactly the hole and nothing shows
+  -- through around it.
+  draw(ev, C_GRAY, ass_rect(POSTER_X, POSTER_Y, x1, POSTER_Y + 2))
+  draw(ev, C_GRAY, ass_rect(POSTER_X, y1 - 2, x1, y1))
+  draw(ev, C_GRAY, ass_rect(POSTER_X, POSTER_Y, POSTER_X + 2, y1))
+  draw(ev, C_GRAY, ass_rect(x1 - 2, POSTER_Y, x1, y1))
+  txt(ev, 5, (POSTER_X + x1) / 2, (POSTER_Y + y1) / 2, 12, C_GRAY,
+      (it.poster ~= "") and "POSTER" or "NO POSTER")
+
+  local y = POSTER_Y
+  for _, l in ipairs(uwrap(ass_escape(it.title:upper()), META_COLS, 4)) do
+    txt(ev, 7, META_X, y, 18, C_YELLOW, l)
+    y = y + 26
+  end
+  y = y + 8
+  if it.year ~= "" then
+    txt(ev, 7, META_X, y, 16, C_CYAN, it.year); y = y + 30
+  end
+  local rt = lib_runtime(it.runtime)
+  if rt ~= "" then txt(ev, 7, META_X, y, 14, C_WHITE, rt); y = y + 24 end
+  if it.rating ~= "" then
+    txt(ev, 7, META_X, y, 14, C_WHITE, "TMDB " .. ass_escape(it.rating))
+    y = y + 24
+  end
+  if it.url == "" then txt(ev, 7, META_X, y, 14, C_GRAY, "NO SOURCE") end
+
+  local py = y1 + 34
+  if it.plot == "" then
+    txt(ev, 7, POSTER_X, py, 14, C_GRAY, "NO SYNOPSIS")
+  else
+    for _, l in ipairs(uwrap(ass_escape(it.plot), PLOT_COLS, PLOT_LINES)) do
+      txt(ev, 7, POSTER_X, py, 14, C_WHITE, l)
+      py = py + 22
+    end
+  end
+end
+
 -- The list pages and the news pages share this; only the metrics differ.
 -- `cur` is relative to the rows handed in, so the caller does the paging.
 local function tt_rows(ev, rows, y, pitch, fs, cur)
@@ -726,19 +1044,29 @@ local function tt_render()
     tt_rows(body, tt.pages[tt.sub] or {}, 170, 30, 20, nil)
   else
     local lines = tt.lines or {}
-    nsub = math.max(1, math.ceil(#lines / LINES_PER_PAGE))
+    -- The library pages give up their right half to the detail panel, so they
+    -- page by their own metrics; everything else keeps the full-width ones.
+    local lib = (page.type == "library")
+    local per = lib and LIB_ROWS or LINES_PER_PAGE
+    nsub = math.max(1, math.ceil(#lines / per))
     -- On a page with a cursor the cursor owns the subpage, not the other way
     -- round: scrolling off the bottom row turns the page under you.
     if tt.cur and #lines > 0 then
       tt.cur = math.max(1, math.min(tt.cur, #lines))
-      tt.sub = math.floor((tt.cur - 1) / LINES_PER_PAGE) + 1
+      tt.sub = math.floor((tt.cur - 1) / per) + 1
     end
     tt.sub = math.max(1, math.min(tt.sub, nsub))
-    local first, slice = (tt.sub - 1) * LINES_PER_PAGE + 1, {}
-    for i = first, math.min(first + LINES_PER_PAGE - 1, #lines) do
+    local first, slice = (tt.sub - 1) * per + 1, {}
+    for i = first, math.min(first + per - 1, #lines) do
       slice[#slice + 1] = lines[i]
     end
-    tt_rows(body, slice, 170, 40, 18, tt.cur and (tt.cur - first + 1) or nil)
+    local cur = tt.cur and (tt.cur - first + 1) or nil
+    if lib then
+      tt_rows(body, slice, LIB_Y0, LIB_PITCH, LIB_FS, cur)
+      tt_lib_panel(body, tt.cur and lines[tt.cur] and lines[tt.cur].item or nil)
+    else
+      tt_rows(body, slice, 170, 40, 18, cur)
+    end
   end
 
   local ev = {}
@@ -760,6 +1088,11 @@ local function tt_render()
                  "{\\1c&H888888&}999 GUIDE")
                 :format(FONT)
   txt(ev, 9, 1228, 684, 18, C_GRAY, tt.sub .. "/" .. nsub)
+  -- One line the page can say something on. It has to live here rather than on
+  -- the banner: a page paints an opaque black screen and is composited above
+  -- the banner overlay, so a banner shown while one is up cannot be seen. Every
+  -- "it didn't work" sentence a page produces ends up on this row.
+  if tt.note then txt(ev, 7, 52, 654, 14, C_YELLOW, tt.note) end
   ov_tt.data = table.concat(ev, "\n")
   ov_tt:update()
   -- A page is an opaque screen: no static gets drawn behind it at all.
@@ -768,6 +1101,18 @@ end
 
 local function tt_set_lines(lines)
   if tt then tt.lines, tt.pages = lines, nil; tt_render() end
+end
+
+-- Put one sentence on the page, if the viewer is still on the page it is
+-- about. 63 columns at fs14 is 643px, which keeps the row clear of the
+-- library pages' divider at x=700.
+local NOTE_COLS = 63
+
+local function tt_note(pageno, text)
+  if tt and tt.no == pageno then
+    tt.note = text and usub(text, NOTE_COLS) or nil
+    tt_render()
+  end
 end
 
 local function tt_set_pages(pages)
@@ -784,28 +1129,129 @@ local function tt_guide_lines()
   return lines
 end
 
+-- One row: TITLE IN CAPS (YEAR), cut to the column the list owns. Upper() in
+-- Lua only touches ASCII, so a Cyrillic title comes through unharmed rather
+-- than mangled, and the cut is by codepoint (constraint 5).
+local function lib_row_text(it)
+  local tail = (it.year ~= "") and (" (" .. it.year .. ")") or ""
+  local title = ass_escape(it.title:upper())
+  local room = LIB_COLS - ulen(tail)
+  if ulen(title) > room then title = trim(usub(title, room - 3)) .. "..." end
+  return title .. tail
+end
+
 -- 993 / 994: the on-demand library, rendered as a teletext index.
--- Rows carry their entry in `item`; tt_render ignores the extra field and
--- select_press is what reads it back out.
+-- Rows carry their entry in `item`; tt_render hands that to the detail panel
+-- and select_press is what plays it.
 local function tt_library_lines(kind)
   load_library()
   local items = (library and library[kind]) or {}
   local lines = {}
   for i, it in ipairs(items) do
-    -- 2 columns of gutter belong to the renderer, so lay out inside 50.
-    local left = ("%3d %s"):format(i, ass_escape(it.title))
-    local pad = 46 - ulen(left) - ulen(it.year)
-    if pad < 1 then pad = 1 end   -- never truncate: cutting UTF-8 by bytes splits codepoints
-    lines[i] = { text = left .. (" "):rep(pad) .. it.year,
+    lines[i] = { text = lib_row_text(it),
                  color = (i % 2 == 1) and C_CYAN or C_WHITE,
                  item = it }
   end
   if #lines == 0 then
-    lines[1] = { text = "NO ENTRIES IN library.tsv", color = C_GRAY }
+    lines[1] = { text = (kind == "show") and "NO SERIES IN library.tsv"
+                                          or "NO FILMS IN library.tsv",
+                 color = C_GRAY }
     lines[2] = { text = "", color = C_GRAY }
-    lines[3] = { text = "NOTHING GENERATES THAT FILE YET.", color = C_GRAY }
+    -- ee3 is a film catalogue, so 994 is empty by construction after a sync.
+    -- Say which of the two it is rather than leaving a bare empty page.
+    lines[3] = { text = (kind == "show")
+                   and "THE ee3 CATALOGUE IS FILMS ONLY."
+                   or "TUNE TO 993 AGAIN TO RETRY THE SYNC.",
+                 color = C_GRAY }
   end
   return lines
+end
+
+-- Pull /library.tsv from the daemon into the local cache.
+--
+-- Async for the same reason a resolve is: paging a catalogue takes seconds to
+-- tens of seconds, and the main thread has to stay free or the box looks
+-- frozen. `wait` says whether the viewer is looking at BUFFERING (no cache) or
+-- at last night's page (stale cache, refresh underneath).
+-- The page a sync redraws is "whichever library page is open when it lands",
+-- not the one that started it: the file is shared by 993 and 994, so tuning
+-- from one to the other mid-fetch should be answered by the same reply.
+local function library_page_kind()
+  local page = tt and TELETEXT[tt.no]
+  return (page and page.type == "library") and page.kind or nil
+end
+
+local function library_fetch(wait)
+  -- Show BUFFERING even if this call is a no-op because a fetch is already
+  -- running: 994 opened while 993 is syncing is waiting on the same file.
+  if wait and tt then
+    tt.cur = nil                     -- nothing to select while it is empty
+    tt_set_lines({ { text = LOADING_TEXT, color = C_GRAY } })
+  end
+  if library_busy then return end
+  library_busy = true
+  library_seq = library_seq + 1
+  local myseq = library_seq
+
+  local function done(err)
+    if myseq ~= library_seq then return end   -- superseded, or given up on
+    library_busy = false
+    if not err then
+      library = nil                  -- force a reparse of the file just written
+      load_library()
+    end
+    local kind = library_page_kind()
+    if kind then
+      -- A refresh under a page someone is reading must not move the cursor
+      -- out from under them: hold the title, not the row number.
+      local row = tt.lines and tt.lines[tt.cur or -1]
+      local keep = row and row.item and row.item.title
+      local lines = tt_library_lines(kind)
+      tt.cur = math.min(tt.cur or 1, math.max(1, #lines))
+      if keep then
+        for i, l in ipairs(lines) do
+          if l.item and l.item.title == keep then tt.cur = i; break end
+        end
+      end
+      -- The sentence goes on the page, not the banner, which the page covers.
+      tt.note = err and usub(err:upper(), NOTE_COLS) or nil
+      tt_set_lines(lines)
+    end
+    if err then
+      mp.msg.warn("library sync failed: " .. err)
+    else
+      mp.msg.info(("library: %d films, %d playable")
+                  :format(#((library and library.movie) or {}), library_urls))
+    end
+  end
+
+  mp.command_native_async(
+    { name = "subprocess", playback_only = false,
+      capture_stdout = true, capture_stderr = true,
+      args = { "python3", RESOLVER, "--library", tostring(LIBRARY_SECONDS) } },
+    guard(function(ok, result)
+      if ok and result and result.status == 0 then
+        done(nil)
+      else
+        local why = (result and result.stderr or ""):match("([^\n]+)%s*$")
+        done((why and why ~= "") and why or "LIBRARY SYNC FAILED")
+      end
+    end))
+
+  -- Backstop, exactly as for a resolve: the fetch has its own deadline inside
+  -- ee3resolve.py, so this is for python3 itself never coming back. Bumping
+  -- the sequence is what makes the late reply harmless.
+  mp.add_timeout(LIBRARY_SECONDS + 20, guard(function()
+    if myseq ~= library_seq or not library_busy then return end
+    library_busy = false
+    library_seq = library_seq + 1
+    local kind = library_page_kind()
+    if kind then
+      tt.cur = tt.cur or 1
+      tt.note = "LIBRARY SYNC TIMED OUT"
+      tt_set_lines(tt_library_lines(kind))
+    end
+  end))
 end
 
 -- One headline, one row, always. Wrapping was worse than shortening: a
@@ -856,7 +1302,7 @@ local function tt_news_fetch(pageno)
     tt_set_pages(cached.pages)
     return
   end
-  tt_set_lines({ { text = "LOADING . . .", color = C_GRAY } })
+  tt_set_lines({ { text = LOADING_TEXT, color = C_GRAY } })
   local gen = tt.gen
   local slots, pending = {}, #page.feeds
   for i, feed in ipairs(page.feeds) do
@@ -1041,7 +1487,16 @@ local function tt_open(no)
     tt_set_lines(tt_guide_lines())
   elseif page.type == "library" then
     tt.cur = 1                      -- a cursor is what makes the page selectable
-    tt_set_lines(tt_library_lines(page.kind))
+    local why = library_needs_sync()
+    if why == "missing" then
+      -- Nothing worth showing: BUFFERING until the daemon answers.
+      library_fetch(true)
+    else
+      tt_set_lines(tt_library_lines(page.kind))
+      -- Stale is not empty. Show it now, freshen it behind the page, and let
+      -- the reply redraw the rows if the viewer is still here.
+      if why == "stale" then library_fetch(false) end
+    end
   elseif page.type == "weather" then
     tt_render()          -- draw frame instantly
     tt_weather_fetch(no)
@@ -1058,42 +1513,129 @@ local function tt_close()
   set_box("tt", nil)
 end
 
--- Left/right on a library page jumps a whole initial. Paging a few hundred
--- titles eleven rows at a time with a d-pad is the difference between a
--- catalogue you use and one you don't.
-local function tt_letter_jump(dir)
+-- Left/right on a library page turns a whole subpage. Walking a couple of
+-- thousand titles twelve rows at a time on a d-pad is the difference between
+-- a catalogue you use and one you don't.
+--
+-- This used to jump to the next initial letter, which only meant anything
+-- while the list was sorted by title. It is in the daemon's order now
+-- (newest first), so a screenful is the unit that makes sense.
+local function tt_page_jump(dir)
   local lines = tt and tt.lines or {}
   local n = #lines
   if n == 0 or not tt.cur then return end
-  local function initial(i)
-    local it = lines[i] and lines[i].item
-    return it and it.title:sub(1, 1):upper() or ""
-  end
-  local here, i = initial(tt.cur), tt.cur
-  if dir > 0 then
-    while i <= n and initial(i) == here do i = i + 1 end
-    tt.cur = math.min(i, n)
-  else
-    -- Back goes to the top of this block first, and only then into the one
-    -- above it — the same way holding rewind works on a real box.
-    while i > 1 and initial(i - 1) == here do i = i - 1 end
-    if i == tt.cur and i > 1 then
-      local prev = initial(i - 1)
-      i = i - 1
-      while i > 1 and initial(i - 1) == prev do i = i - 1 end
-    end
-    tt.cur = i
-  end
+  tt.cur = math.max(1, math.min(n, tt.cur + dir * LIB_ROWS))
   tt_render()
+end
+
+-- Stop the torrent engine, if one is running. Idempotent, and safe to call
+-- from anywhere that abandons a film.
+local function torrent_stop()
+  if not torrent then return end
+  local t = torrent
+  torrent = nil
+  if t.timer then t.timer:kill() end
+  -- Killing the subprocess is the whole point: torrentstream.sh execs the
+  -- engine, so this reaches the engine itself rather than a shell that has
+  -- already forgotten about it.
+  if t.id then mp.abort_async_command(t.id) end
+  mp.msg.verbose("torrent engine stopped")
 end
 
 -- Commit to playing a film once there is a real URL for it.
 local function play_ondemand(it, url, pageno)
-  ondemand = it
+  ondemand, resolving = it, nil
   dead, loading, playing = false, true, nil
   static_on()
   mp.commandv("loadfile", url, "replace")
-  show_banner(pageno, it.title)
+  -- The film announces itself with the transport bar rather than a channel
+  -- banner: same corner, same font, but it also brings the progress bar and
+  -- says what the buttons now do.
+  trans_show()
+end
+
+-- A magnet is not something mpv can open. torrentstream.sh runs peerflix or
+-- webtorrent in server mode and this waits for it to have something servable,
+-- then plays the LOCAL http url in the mpv we are already inside.
+--
+-- Two separate deadlines are at work: the engine subprocess only "returns"
+-- when it dies, which is a failure worth reporting, and the probe loop gives
+-- up after TORRENT_SECONDS when it is alive but has found no peers.
+local function torrent_play(it, magnet, pageno)
+  -- Take a fresh generation. This is the handover from resolving to
+  -- downloading, and bumping it here is what disarms the resolve's own
+  -- RESOLVE_SECONDS backstop — otherwise that timer would fire in the middle
+  -- of a perfectly healthy download and tear it down at 130s, while the engine
+  -- was still inside its own 150s deadline.
+  resolve_seq = resolve_seq + 1
+  local myseq = resolve_seq
+  torrent_stop()
+  local port = TORRENT_PORT
+  torrent = { port = port }
+
+  -- Handing over from RESOLVING to BUFFERING: the resolve is done, and what
+  -- comes next is a real download that can take a while. `resolving` stays
+  -- set so Back still cancels (and now also kills the engine).
+  show_banner(pageno, "BUFFERING . . . " .. usub(it.title:upper(), 26), true)
+
+  local function fail(why)
+    if myseq ~= resolve_seq or ondemand then return end
+    resolve_seq = resolve_seq + 1
+    torrent_stop()
+    loading, resolving = false, nil
+    static_off()
+    if TELETEXT[pageno] then
+      tt_open(pageno)
+      tt_note(pageno, why:upper())          -- tt_note does its own shortening
+    else
+      show_banner(pageno, usub(why:upper(), 40))
+    end
+  end
+
+  torrent.id = mp.command_native_async(
+    { name = "subprocess", playback_only = false,
+      capture_stdout = true, capture_stderr = true,
+      args = { "bash", TORRENT_SH, magnet, tostring(port) } },
+    guard(function(ok, result)
+      -- The engine exiting while we are still waiting is a failure; exiting
+      -- after the film is up is just us having killed it.
+      if myseq ~= resolve_seq or ondemand then return end
+      if result and result.killed_by_us then return end
+      local why = (result and result.stderr or ""):match("([^\n]+)%s*$")
+      fail((why and why ~= "") and why or "TORRENT ENGINE STOPPED")
+    end))
+
+  -- Ask the engine where the film is, rather than assuming: peerflix serves it
+  -- at "/" and webtorrent at /<infoHash>/<idx>/<name>, and --probe knows the
+  -- difference. `probing` keeps one probe in flight at a time so a slow answer
+  -- cannot stack them up.
+  local deadline, probing = os.time() + TORRENT_SECONDS, false
+  torrent.timer = mp.add_periodic_timer(TORRENT_POLL, guard(function()
+    if myseq ~= resolve_seq or ondemand then return end
+    if os.time() > deadline then
+      fail("NOTHING TO STREAM - NO PEERS?")
+      return
+    end
+    if probing then return end
+    probing = true
+    mp.command_native_async(
+      { name = "subprocess", playback_only = false,
+        capture_stdout = true, capture_stderr = true,
+        args = { "bash", TORRENT_SH, "--probe", tostring(port) } },
+      guard(function(pok, pres)
+        probing = false
+        if myseq ~= resolve_seq or ondemand then return end
+        local url = pok and pres and pres.status == 0
+                    and trim(pres.stdout or "") or ""
+        if url == "" then return end            -- not serving yet; try again
+        if torrent and torrent.timer then
+          torrent.timer:kill()
+          torrent.timer = nil
+        end
+        mp.msg.info("torrent ready: " .. url)
+        play_ondemand(it, url, pageno)
+      end))
+  end))
 end
 
 -- `ee3:<id>` -> a URL, via ee3resolve.py on the LXC daemon. Async, because
@@ -1103,8 +1645,11 @@ local function resolve_and_play(it, pageno)
   resolve_seq = resolve_seq + 1
   local myseq = resolve_seq
   dead, loading, playing = false, true, nil
+  resolving = pageno
   static_on()
-  show_banner(pageno, "RESOLVING - " .. it.title)
+  -- Sticky: this one stays on screen for the whole wait. It is the only
+  -- feedback there is between OK and the first frame.
+  show_banner(pageno, "RESOLVING . . . " .. usub(it.title:upper(), 32), true)
 
   mp.command_native_async(
     { name = "subprocess", playback_only = false,
@@ -1116,17 +1661,28 @@ local function resolve_and_play(it, pageno)
       local url = ok and result and result.status == 0
                   and (result.stdout or ""):match("^%s*(.-)%s*$") or nil
       if url and url ~= "" then
-        play_ondemand(it, url, pageno)
+        -- /resolve normally answers with a magnet, and a magnet needs an
+        -- engine in front of it before mpv can see a stream. A plain http url
+        -- (torrentio occasionally serves one) still goes straight to mpv.
+        if url:sub(1, 7) == "magnet:" then
+          torrent_play(it, url, pageno)
+        else
+          play_ondemand(it, url, pageno)
+        end
         return
       end
       -- ee3resolve.py puts one human sentence on stderr; that is the whole
       -- point of it, so show that rather than a status code.
       local why = (result and result.stderr or ""):match("([^\n]+)%s*$") or ""
       if why == "" then why = "RESOLVE FAILED" end
-      loading = false
+      loading, resolving = false, nil
       static_off()
-      if TELETEXT[pageno] then tt_open(pageno) end
-      show_banner(pageno, usub(why:upper(), 40))
+      if TELETEXT[pageno] then
+        tt_open(pageno)
+        tt_note(pageno, why:upper())
+      else
+        show_banner(pageno, usub(why:upper(), 40))
+      end
     end))
 
   -- A resolve that never comes back would leave static up forever. The daemon
@@ -1134,10 +1690,14 @@ local function resolve_and_play(it, pageno)
   mp.add_timeout(RESOLVE_SECONDS, guard(function()
     if myseq ~= resolve_seq or ondemand then return end
     resolve_seq = resolve_seq + 1
-    loading = false
+    loading, resolving = false, nil
     static_off()
-    if TELETEXT[pageno] then tt_open(pageno) end
-    show_banner(pageno, "RESOLVE TIMED OUT")
+    if TELETEXT[pageno] then
+      tt_open(pageno)
+      tt_note(pageno, "RESOLVE TIMED OUT")
+    else
+      show_banner(pageno, "RESOLVE TIMED OUT")
+    end
   end))
 end
 
@@ -1148,7 +1708,7 @@ local function tt_play_selected()
   if it.url == "" then
     -- An entry with no url at all: the catalogue knows the title, nothing
     -- knows where to get it. Say so rather than dropping to silent static.
-    show_banner(tt.no, "NO SOURCE - " .. it.title)
+    tt_note(tt.no, "NO SOURCE - " .. it.title:upper())
     return
   end
   local pageno = tt.no
@@ -1211,8 +1771,10 @@ local function tune(no)
   -- again, not the library's. That includes one still being resolved - the
   -- reply is dropped rather than pulling the viewer off the channel they
   -- just chose.
-  ondemand = nil
+  ondemand, resolving = nil, nil
   resolve_seq = resolve_seq + 1
+  trans_hide()
+  torrent_stop()
   current = no
   show_banner(no, chan_name(no))
 
@@ -1262,16 +1824,34 @@ mp.register_event("playback-restart", guard(function()
     stop_retry()
     static_off()
   end
+  -- Fires on first frame and again after every seek, which is exactly when the
+  -- transport bar wants redrawing: this is the first moment `duration` is
+  -- known, so it is also the first moment the progress bar means anything.
+  if ondemand then trans_show() end
 end))
 
 mp.register_event("end-file", guard(function(ev)
   if zap_timer then return end
   if ondemand then
+    -- ONLY the reasons that mean the film itself is over. `loadfile ... replace`
+    -- ends the OUTGOING file first, and that arrives here as reason="stop"
+    -- AFTER play_ondemand has already set `ondemand` — so treating every
+    -- end-file as "the film ended" tore the film down at the instant it
+    -- started, killed the torrent engine, and left the box on static. The
+    -- channel branch below has always filtered reasons; this one has to too.
+    -- "stop" is also what back_press's mp.commandv("stop") produces, and that
+    -- path has already cleared `ondemand` and cleaned up for itself.
+    if not (ev.reason == "eof" or ev.reason == "error"
+            or ev.reason == "unknown") then
+      return
+    end
     -- A film is not a channel. Reaching the end is a normal thing to do, and
     -- a failure is not worth retrying every 12s forever — either way, back to
     -- the page it was picked from.
     local it, failed = ondemand, (ev.reason == "error")
     ondemand = nil
+    trans_hide()
+    torrent_stop()
     loading, dead = false, false
     static_off()
     if current and TELETEXT[current] then
@@ -1395,37 +1975,76 @@ local function nav(dr, dc)
     keypad.c = ((keypad.c - 1 + dc) % 3) + 1
     keypad_render()
   elseif tt and tt.cur then
-    -- Selectable page: rows under up/down, initials under left/right.
+    -- Selectable page: rows under up/down, whole subpages under left/right.
+    -- Moving the cursor clears the note: it was about the row you were on.
+    tt.note = nil
     if dr ~= 0 then
       tt.cur = tt.cur + dr
       tt_render()
     elseif dc ~= 0 then
-      tt_letter_jump(dc)
+      tt_page_jump(dc)
     end
   elseif tt and (dr ~= 0 or dc ~= 0) then
     -- 991 is two subpages side by side, so left/right turns them too: on a
     -- page-per-language layout, "next page" is a sideways thought.
     tt.sub = tt.sub + ((dr ~= 0) and dr or dc)
     tt_render()
+  elseif ondemand then
+    -- A film is not a channel. Left/right scrub instead of turning subpages,
+    -- and up/down bring the transport bar up rather than zapping: nudging the
+    -- d-pad should not throw away a film you are 40 minutes into. The shoulder
+    -- buttons still zap, and Back still returns to the page it came from.
+    if dc ~= 0 then
+      mp.commandv("seek", tostring(dc * SEEK_STEP), "relative")
+    end
+    trans_show()
   elseif dr ~= 0 then
     tune_relative(-dr)     -- dpad up = channel up
   end
 end
 
+-- Films only. Pausing a live channel does not pause anything - the broadcast
+-- carries on without you and the stream comes back desynced - so this is a
+-- no-op on a channel rather than a trap (constraint 3).
+local function playpause_press()
+  if not ondemand then return end
+  mp.commandv("cycle", "pause")
+  trans_show()
+end
+
 local function select_press()
   if keypad then keypad_select()
-  elseif tt and tt.cur then tt_play_selected() end
+  elseif tt and tt.cur then tt_play_selected()
+  -- Ⓐ during a film is the "info" button: it brings the title and the progress
+  -- bar back without changing anything.
+  elseif ondemand then trans_show() end
 end
 
 local function back_press()
   if keypad then
     keypad = nil
     keypad_render()
+  elseif resolving then
+    -- Backing out of a wait. Without this, B during a resolve fell through to
+    -- the quit at the bottom and dropped the viewer out of cable mode - and a
+    -- resolve is the one thing here that can keep you waiting a minute.
+    local pageno = resolving
+    resolving = nil
+    resolve_seq = resolve_seq + 1     -- the reply, if it comes, is dropped
+    torrent_stop()                    -- and the engine, if one had started
+    loading = false
+    static_off()
+    if TELETEXT[pageno] then
+      tt_open(pageno)
+      show_banner(pageno, chan_name(pageno))
+    end
   elseif ondemand then
     -- Stop the film and go back to the page it was picked from, rather than
     -- straight out of cable mode. Backing out of THAT still quits.
     local it = ondemand
     ondemand = nil
+    trans_hide()
+    torrent_stop()
     loading, dead = false, false
     mp.commandv("stop")
     static_off()
@@ -1459,10 +2078,20 @@ mp.add_key_binding(nil, "nav-left",  guard(function() nav(0, -1) end), { repeata
 mp.add_key_binding(nil, "nav-right", guard(function() nav(0, 1)  end), { repeatable = true })
 mp.add_key_binding(nil, "select",   guard(select_press))
 mp.add_key_binding(nil, "back",     guard(back_press))
+mp.add_key_binding(nil, "playpause", guard(playpause_press))
 mp.add_key_binding(nil, "guide",    guard(function() tune(999) end))
 for d = 0, 9 do
   mp.add_key_binding(nil, "digit-" .. d, guard(function() digit_press(d) end))
 end
+
+-- Leaving cable mode must not leave a torrent engine behind. mpv kills its own
+-- subprocesses on exit, but Back at the top level quits through `mp.commandv
+-- ("quit")` and a seeding engine outliving the player is exactly the kind of
+-- thing nobody notices until the box is slow for a week.
+mp.register_event("shutdown", function()
+  local ok, err = pcall(torrent_stop)
+  if not ok then mp.msg.error("shutdown: " .. tostring(err)) end
+end)
 
 ------------------------------------------------------------------- boot -------
 math.randomseed(os.time())
