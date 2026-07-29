@@ -216,6 +216,11 @@
     flex: 1;
     display: grid;
     grid-template-columns: repeat(var(--layout-grid-columns), 1fr);
+    /* max-content, not the default auto: the cards carry an aspect-ratio, and
+       an auto row inside a height-constrained grid gets squeezed while the
+       card keeps its own height — which makes every row overlap the one
+       below it. Sizing rows to their content is what stops that. */
+    grid-auto-rows: max-content;
     gap: var(--layout-grid-gap);
     margin-top: var(--space-4);
     overflow: hidden;
