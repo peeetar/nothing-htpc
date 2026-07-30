@@ -324,14 +324,12 @@ def _expand(cmd):
 
 
 def _child_env(cfg=None):
-    # Launched apps get HTPC_DIR too, so a script started from a tile can find
-    # its siblings the same way (cabletv.sh resolves its own dir, but anything
-    # a user wires into a tile shouldn't have to).
+    # Launched apps get HTPC_DIR, so a script wired into a tile can find its
+    # siblings without having a path baked into it.
     #
-    # `weather` in config.json is NOT handed down any more: it is the box's own
-    # location, for the launcher's home screen, and teletext 992 stopped being
-    # about where the box is in July 2026 - it is a fixed three-city forecast
-    # with its own list in cabletv.lua.
+    # `weather` in config.json is NOT handed down: it is the box's own
+    # location, for the launcher's home screen only. The WEATHER screen is a
+    # fixed three-city forecast with its own list in launcher/app.js.
     env = dict(os.environ)
     env["HTPC_DIR"] = str(HTPC_DIR)
     return env

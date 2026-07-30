@@ -36,6 +36,11 @@ done
 HTPC_USER="${SUDO_USER:-$(id -un)}"
 HTPC_UID="$(id -u "$HTPC_USER")"
 
+# peerflix and webtorrent are gone with the July 2026 remodel: torrent
+# streaming is TorrServer now, a single static Go binary that apt does not
+# carry. It is optional — live TV, news, weather and music all work without
+# it, only MOVIES and SHOWS need it — so it is not in this list and step 6
+# just says whether it is running. See README.md.
 PKGS=(cage chromium mpv foot htop python3 python3-evdev v4l-utils playerctl
       pipewire pipewire-audio wireplumber fonts-dejavu-core git curl)
 
@@ -109,8 +114,10 @@ if [ "$CHECK" = 1 ]; then
 
   step "Install"
   ok "repo: $REPO"
-  for f in server/server.py launcher/index.html system/start-session.sh \
-           daemon/homebutton.py daemon/cecd.py cabletv/cabletv.sh; do
+  for f in server/server.py launcher/index.html launcher/app.js \
+           launcher/theme.js launcher/theme.json system/start-session.sh \
+           daemon/homebutton.py daemon/cecd.py cabletv/shim.lua \
+           cabletv/channels.m3u; do
     [ -f "$REPO/$f" ] && ok "$f" || bad "$f missing from the checkout"
   done
   if [ -f "$REPO/server/config.local.json" ]; then
@@ -210,7 +217,7 @@ step "4/6 Files"
 # Nothing is copied: the service runs this checkout where it stands. All this
 # step has to guarantee is that the bits git does not reliably carry (exec
 # permissions) are set, and that the session user can actually get here.
-run chmod +x "$REPO/system/"*.sh "$REPO/cabletv/cabletv.sh" "$REPO/daemon/"*.py
+run chmod +x "$REPO/system/"*.sh "$REPO/daemon/"*.py
 ok "scripts executable"
 
 if repo_readable; then

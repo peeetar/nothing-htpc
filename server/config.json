@@ -1,33 +1,15 @@
 {
+  "_note": "Box config. Precedence is HTPC_CONFIG env > config.local.json > this file. The repo runs in place, so `git pull` would fight with local edits here — put your own values in an untracked server/config.local.json instead. It wins over this file and an update never touches it.",
+
   "weather": {
     "lat": 41.117,
     "lon": 20.802,
-    "_note": "Set to your coordinates. Weather comes from open-meteo.com, no API key."
+    "_note": "The box's own location, for the one-line reading on the home screen. Open-Meteo, no API key. The WEATHER screen is a separate, deliberately fixed three-city forecast (Skopje / Ljubljana / Thessaloniki) — those are identities of their own, set in launcher/app.js, not this coordinate."
   },
-  "apps": [
-    {
-      "id": "tv",
-      "label": "TV",
-      "command": ["bash", "$HTPC_DIR/cabletv/cabletv.sh"],
-      "_note": "Everything that is watching-TV, behind one tile: live channels AND the on-demand library, addressed by channel number. Replaced the old separate STREAMING (jellyfin-mpv-shim) and LIVE TV tiles in July 2026 — phone-casting is gone, the remote drives everything now. $HTPC_DIR is the repo root, filled in by server.py, so no path is baked in. Channels in cabletv/channels.m3u, library index in cabletv/library.tsv, teletext on 990-999. Needs: apt install mpv. Prefer H.264 — the 3B+ has no HEVC hardware decoder."
-    },
-    {
-      "id": "music",
-      "label": "MUSIC",
-      "view": "music",
-      "_note": "A view inside the launcher page, not a process — so there is no launch and no black screen between the menu and the music screen. Shows what spotifyd is playing (MPRIS via playerctl) and offers prev/playpause/next. Playback is started from the Spotify app on your phone; this box is the Connect speaker. Needs: apt install playerctl, a spotifyd build with dbus_mpris, and use_mpris = true in spotifyd.conf."
-    },
-    {
-      "id": "apps",
-      "label": "APPS",
-      "command": null,
-      "_note": "Reserved — point at anything."
-    },
-    {
-      "id": "settings",
-      "label": "SETTINGS",
-      "command": ["foot", "htop"],
-      "_note": "Placeholder. Swap for a settings app or a terminal of your choice."
-    }
-  ]
+
+  "tmdb_key": "",
+  "_note_tmdb": "OPTIONAL, and the only key this project wants. Without it the film detail panel shows what Cinemeta gives away free: a director, a writer and three cast. With it you also get the producer, five cast, and three user reviews with star ratings. Free at themoviedb.org/settings/api — it does not expire and there is no OAuth flow. Put the real value in config.local.json, not here: this file is tracked.",
+
+  "apps": [],
+  "_note_apps": "Tiles that launch a *process*. Empty, and that is the point of the July 2026 remodel: TV, MOVIES, SHOWS, NEWS, WEATHER and MUSIC are all screens inside the launcher page now, so opening one starts nothing and there is no black frame between the menu and the picture. The launch machinery in server.py stays for whatever comes next — a gamescope tile is the expected one. An entry is {id, label, command: [...]}; $HTPC_DIR in a command expands to the repo root, so no absolute path is ever baked in."
 }

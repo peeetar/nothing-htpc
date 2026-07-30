@@ -1,27 +1,47 @@
 # nothing-htpc
 
 A controller-only home theater box with a Nothing-OS-inspired shell:
-pure black, dot-matrix clock, one red dot, four tiles. No desktop
+pure black, dot-matrix type, one red accent, six screens. No desktop
 environment, no Kodi, nothing to break on update.
 
 It runs on a **Raspberry Pi 3B+ cable-tied behind the TV**. No tower,
 no fan, one HDMI cable and one power lead.
 
-- **TV** — a real 1990s cable box: channel numbers, a keypad, static on
-  dead channels, teletext. Live channels *and* the on-demand library live
-  behind this one tile, both addressed by channel number — films are on
-  993, series on 994 (see [cabletv/README.md](cabletv/README.md))
-- **MUSIC** — a now-playing screen built into the launcher itself, not a
-  separate app: the box is a Spotify Connect speaker, the phone picks the
-  music, and the TV shows it with no black screen in between
+**One page draws everything.** mpv runs underneath for the whole session,
+idle when nothing is on, and the launcher is composited over it — so
+opening a screen starts no process and there is never a black frame
+between the menu and the picture.
+
+- **TV** — live channels, zapped by number. A bar at the bottom carries
+  the channel number, its name and the clock, then fades. Numbers live
+  here and nowhere else (see [cabletv/README.md](cabletv/README.md))
+- **MOVIES / SHOWS** — a poster grid over the Stremio addon protocol:
+  Cinemeta for the catalogue, Torrentio for streams, TorrServer to play
+  them. Five rows to a page, and a detail panel with credits and reviews
+- **NEWS** — Time.mk by category across the top half, Θεσσαλονίκη across
+  the bottom, headlines scrolling
+- **WEATHER** — Skopje, Ljubljana and Θεσσαλονίκη: current conditions
+  and three days each
+- **MUSIC** — the box is a Spotify Connect speaker; the phone picks the
+  music and the TV shows it
 - **HDMI-CEC** — the Pi has a real CEC line, so **the TV remote drives
-  the whole thing**. Arrows and OK navigate the launcher; channel
-  up/down and the number keys work in cable mode.
-- **Controller optional** — an 8BitDo pad still works everywhere; hold
-  the guide button ~1 s in any app to return to the launcher.
+  the whole thing**. Arrows and OK navigate everywhere; the number keys
+  tune channels.
+- **Controller optional** — an 8BitDo pad works everywhere; hold the
+  guide button ~1 s to return home.
+
+Every colour, size, spacing, duration and user-facing string in the whole
+UI comes from one file, [`launcher/theme.json`](launcher/theme.json).
+Editing it restyles the product; nothing else should need touching.
 
 Idle footprint is roughly 400–500 MB of the Pi's 1 GB, and ~0 % CPU at
 the menu.
+
+> **The July 2026 remodel replaced the retro cable-TV mode.** The 1990s
+> pastiche — analog static, teletext pages, the ASS-drawn banner — is
+> gone, along with the ee3 backend that fed it. [REMODEL.md](REMODEL.md)
+> is the decision record. The last commit before it is tagged
+> `pre-remodel`.
 
 > Moving from the old x86 build? See [PACKAGING.md](PACKAGING.md) and the
 > [x86 notes](#appendix-the-x86-tower-build) at the end. The Pulse-Eight
@@ -57,38 +77,62 @@ client. Output tops out at 1080p — there is no 4K path here.
 
 **1 GB of RAM, shared with the GPU.** This is why Chromium runs with a
 64 MB JS heap and one renderer, why Feishin (Electron) is gone, and why
-`cabletv.sh` shrinks its buffers on small machines. It works, but there
-is no headroom for a second heavy app.
+mpv's demuxer buffers are shrunk in `start-session.sh`. It works, but
+there is no headroom for a second heavy app. `theme.json`'s `pi3` profile
+is what keeps this machine viable — fewer posters in flight, less motion,
+a narrower grid.
 
 ## How it works
 
 ```
-boot → systemd → cage (Wayland kiosk) → chromium --kiosk → launcher/index.html
-                                   ↘ server.py    (:8484, launches/kills apps)
-                                   ↘ homebutton.py (hold guide button → /home)
-                                   ↘ cecd.py       (TV remote → keys, TV off → home)
-                                   ↘ spotifyd      (Spotify Connect endpoint)
+boot → systemd → cage (Wayland kiosk)
+                  ├─ mpv --idle --input-ipc-server   video, BOTTOM layer
+                  │    └─ cabletv/shim.lua           failure/retry only, draws nothing
+                  ├─ chromium --kiosk (transparent)  ALL UI, TOP layer
+                  ├─ server.py    (:8484)            static UI, catalogue, mpv bridge
+                  ├─ homebutton.py                   hold guide button → /home
+                  ├─ cecd.py                         TV remote → keys, TV off → home
+                  └─ spotifyd                        Spotify Connect endpoint
 ```
 
-`server.py` reads `server/config.json`; each tile maps either to a
-`command` (a process) or to a `view` (a screen inside the launcher page —
-currently just MUSIC). Launching a tile kills the previous app's whole
-process group, so there is always exactly one foreground app, or the
-launcher. If a command is missing or fails, the launcher says so on
-screen — there is no demo mode.
+mpv starts **first** and Chromium **second**, because cage raises the
+newest window and the UI has to be on top. mpv stays running for the
+whole session and is never restarted per channel — that is what removes
+the black frame.
+
+A web page cannot open a unix socket, so `server.py` is the bridge:
+`POST /player/load`, `POST /player/stop` and `GET /player/state` marshal
+JSON onto mpv's IPC socket. It is still stdlib-only.
+
+`server/config.json` no longer lists tiles — every screen is in the
+launcher page. It carries the home screen's weather coordinates and an
+optional TMDB key. The `apps` list and the launch/kill machinery stay for
+whatever comes next (a gamescope tile is the expected one). If something
+fails, the launcher says so on screen — there is no demo mode.
 
 Repo layout (**the folder structure is load-bearing** — the service,
 scripts and server all find each other by relative path):
 
 ```
-launcher/index.html          the UI
-server/server.py             backend
-server/config.json           tiles + weather coords
+launcher/index.html          markup + stylesheet (no literal values)
+launcher/app.js              every screen, the dot-matrix engine, input
+launcher/theme.js            loads theme.json onto :root as CSS variables
+launcher/theme.json          THE ONE FILE — colour, type, spacing, motion,
+                             layout, copy, and the pi3 hardware profile
+server/server.py             backend: static UI, mpv bridge, endpoints
+server/stremio.py            Cinemeta catalogue + Torrentio streams
+server/tmdb.py               optional: credits and reviews (needs a key)
+server/feeds.py              RSS proxy for the news screen
+server/channels.py           channels.m3u parser
+server/mpvipc.py             mpv IPC client
+server/config.json           weather coords, optional tmdb_key
 server/config.local.json     optional, untracked, wins over the above
-server/config.vm.json        stand-in apps for testing on a dev machine
+server/config.vm.json        dev-machine config for dev-session.sh --vm
 daemon/homebutton.py         hold-guide-to-go-home daemon
 daemon/cecd.py               HDMI-CEC: TV remote → uinput, TV standby → home
-cabletv/                     old-school cable TV mode for the TV tile
+cabletv/channels.m3u         the live dial
+cabletv/shim.lua             mpv-side failure handling; draws nothing
+test/run-all.sh              everything checkable without a Pi
 system/install.sh            installer + `--check` auditor
 system/dev-session.sh        run the whole thing on a dev machine
 system/start-session.sh      what cage runs
@@ -145,20 +189,24 @@ groups right, service identity matching your uid, `ExecStart` pointing at
 this checkout, backend answering.
 
 Then set your latitude/longitude — this is the launcher's home-screen
-weather (open-meteo.com, no API key); teletext page 992 is a separate,
-fixed three-city forecast set in `cabletv/cabletv.lua` — and pick your app
-commands. Either edit `server/config.json` directly, or
-— better, since the repo is now live — copy it to
-`server/config.local.json` and edit that. The backend prefers the
-`.local` one when it exists and git ignores it, so your coordinates and
-app choices survive every `git pull`.
+weather (open-meteo.com, no API key). The WEATHER *screen* is a separate,
+deliberately fixed three-city forecast set in `launcher/app.js`.
 
-Paths inside a tile's `command` can use `$HTPC_DIR`, which the backend
-expands to the repo root:
+**Do not edit `server/config.json`.** The repo is live and runs in place,
+so `git pull` would fight with local edits. Create
+`server/config.local.json` instead — the backend prefers it when it
+exists and git ignores it, so your settings survive every update:
 
 ```json
-"command": ["bash", "$HTPC_DIR/cabletv/cabletv.sh"]
+{
+  "weather": { "lat": 41.9973, "lon": 21.4280 },
+  "tmdb_key": "optional — see the Movies section"
+}
 ```
+
+If you ever add a tile that launches a process, paths in its `command`
+can use `$HTPC_DIR`, which the backend expands to the repo root — so no
+absolute path is baked in anywhere.
 
 ## The long way
 
@@ -189,7 +237,7 @@ the udev rule and the exec bits git may not have carried:
 
 ```bash
 sudo cp system/99-htpc-input.rules /etc/udev/rules.d/
-chmod +x system/*.sh cabletv/cabletv.sh daemon/*.py
+chmod +x system/*.sh daemon/*.py test/*.sh
 ```
 
 > **Three lines in the unit are machine-specific.** `User=petar` and
@@ -237,16 +285,18 @@ It is off by default on many sets.
 uinput device, so they arrive at whatever is on screen as ordinary key
 presses. Nothing in the launcher or in mpv knows CEC exists:
 
-| TV remote | Launcher | Cable mode |
-|---|---|---|
-| ◀ ▶ | move between tiles | keypad, teletext subpages, letter-jump on 993/994 |
-| ▲ ▼ | — | teletext subpages, cursor on 993/994 |
-| OK | open tile | select |
-| Back | — | back |
-| Exit / Menu | return to launcher (via `POST /home`) | return to launcher |
-| Ch +/− | — | change channel |
-| 0–9 | — | tune directly |
-| Guide | — | teletext guide (999) |
+| TV remote | Home | Poster grid | Live TV |
+|---|---|---|---|
+| ◀ ▶ | move between tiles | move the cursor | — |
+| ▲ ▼ | — | move a row, and page past the last one | change channel |
+| OK | open | open the detail panel, then play | re-show the bar |
+| Back | — | close the panel, then go back | stop and go back |
+| Exit / Menu | — | return home (via `POST /home`) | return home |
+| Ch +/− | — | — | change channel |
+| 0–9 | — | — | tune directly |
+
+One set of intents, routed by whichever screen is up — the gamepad, a
+keyboard and the TV remote all arrive at the same four handlers.
 
 Volume is deliberately absent: it is the TV's job, over its own remote.
 
@@ -260,86 +310,110 @@ power follow only, so a permissions slip costs you the remote, not the box.
 
 ---
 
-# Apps
+# Screens
+
+None of these is an app. Every one is a screen in the launcher page, so
+opening one starts no process and shows no black frame.
 
 ## TV
 
-One tile, `cabletv/`, which is its own thing entirely — channel numbers,
-keypad, static, teletext. See [cabletv/README.md](cabletv/README.md).
+Live channels from `cabletv/channels.m3u`, tuned by number — the only
+place numbers still exist. Free IPTV lists come from
+[iptv-org](https://github.com/iptv-org/iptv); prefer H.264.
 
-Live channels live in `cabletv/channels.m3u`; free IPTV lists come from
-[iptv-org](https://github.com/iptv-org/iptv). Prefer H.264 streams.
+Zapping does not wait for streams: the number and the bar change on the
+keypress, and the stream is not opened until the number has sat still for
+450 ms, so you can run up the dial without sitting through a load per
+channel. Three digits tune instantly, fewer after a two-second pause.
 
-On-demand films and series are teletext pages 993 and 994, read from
-`cabletv/library.tsv`. Highlight a row and a detail panel on the right shows
-the title, year, runtime, rating, synopsis and a reserved poster frame; press
-OK and mpv plays it — the same loadfile path a channel uses. The file has
-eight columns (`kind, title, year, url, runtime, rating, poster, overview`,
-the last four optional) and the player never learns where the titles came
-from; whatever fills the file does the parsing.
+A dead channel shows black and a three-dot indicator, and `shim.lua`
+retries it every 12 s. There is no static any more.
 
-That file is a **cache**, and gitignored: opening 993 with no cache fetches it
-from the daemon behind a `BUFFERING . . .` page, and opening it with one over
-6 h old shows the cached page immediately and refreshes underneath. Rows stay
-in the daemon's order — newest release first — so the page opens on what has
-just arrived.
+## Movies and Shows
 
-### The on-demand backend
+A poster grid over the Stremio addon protocol. Three layers, none of
+which needs an account:
 
-What fills it is `server/movieapi.py`, and **it does not run on the Pi.** It
-is a FastAPI daemon that holds an ee3 session, and it lives on its own LXC at
-`192.168.1.16:1209`. That separation is the point: `server.py` and
-`gen_static.py` are stdlib-only because the Pi has no pip packages and no
-room in 1GB for a second daemon, so anything with dependencies goes on
-another box. Nothing on the Pi imports it — the Pi talks HTTP to it through
-`cabletv/ee3resolve.py`, which is stdlib.
-
-```
-Pi                                  LXC 192.168.1.16:1209
-  cabletv.lua  ── ee3resolve.py ──►   movieapi.py ──► ee3.me
-                                                 └──► torrentio
-```
-
-| Endpoint | |
+| | |
 |---|---|
-| `GET /health` | auth state (no password in the reply) |
-| `GET /movies` | proxy of ee3's `/api/movies`; all filters pass through |
-| `GET /resolve/{id}` | one movie id → a URL mpv can open |
-| `GET /library.tsv` | the whole catalogue, ready for `cabletv/library.tsv` |
+| **Cinemeta** `v3-cinemeta.strem.io` | catalogue, posters, plot, runtime, rating, cast |
+| **Torrentio** `torrentio.strem.fun` | `infoHash` per title, ranked by seeders |
+| **TorrServer** `127.0.0.1:8090` | turns that into an HTTP stream mpv can open |
 
-Credentials come from the environment, never the repo:
+A page is five rows; the viewport shows the two that fit and scrolls, and
+running off the bottom turns the page. Ⓐ opens a detail panel — year,
+runtime, rating, synopsis, credits, and user reviews with star ratings —
+and Ⓐ again plays.
+
+Stream choice is filtered to what the box can actually decode: H.264,
+1080p max, no HEVC/VP9/AV1 on the Pi. That is a correctness rule, not a
+preference — a 2160p AV1 remux is a slideshow on a 3B+. Raise it with
+`HTPC_MAX_HEIGHT` and `HTPC_ALLOW_HEVC=1` on better hardware.
+
+**Stream addons are a list, not a constant.** `torrentio.strem.io` — the
+address every guide still gives — stopped resolving entirely by July 2026
+while `strem.io` itself stayed up. Set `HTPC_STREAM_ADDONS` to a
+comma-separated list; the default is `torrentio.strem.fun` then
+`comet.elfhosted.com`, and one dead host costs a retry.
+
+### TorrServer
+
+Optional — everything except MOVIES and SHOWS works without it. One
+static Go binary, no Node, no `peerflix`:
 
 ```bash
-# on the LXC
-pip install fastapi httpx uvicorn
-printf 'EE3_USERNAME=you\nEE3_PASSWORD=secret\n' > server/ee3.env  # gitignored
-chmod 600 server/ee3.env
-EE3_ENV_FILE=server/ee3.env python3 server/movieapi.py
-curl -s localhost:1209/health
+curl -L -o /usr/local/bin/torrserver \
+  https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm7
+chmod +x /usr/local/bin/torrserver
+torrserver --port 8090 --path ~/.cache/torrserver &
 ```
 
-`server/ee3-api.service` is a unit for it. The Pi refreshes the catalogue by
-itself when 993 is opened; `cabletv/ee3resolve.py --library` does it by hand,
-and `EE3_API` points at the daemon if it is not at the default address.
+Point elsewhere with `TORRSERVER_URL`.
 
-`GET /library.tsv` carries the detail-panel columns (runtime, rating, TMDB
-poster url, overview) alongside the four the player has always read. They are
-shipped in the file rather than fetched per title on purpose: the panel
-redraws on every cursor move, and a round trip under the d-pad would make
-scrolling feel broken.
+**The cheapest upgrade available is a debrid account.** With a key in
+`TORRENTIO_OPTS` (e.g. `realdebrid=XXXX`), Torrentio returns direct HTTPS
+links instead of magnets and TorrServer is never asked anything — no
+BitTorrent on the box at all, and seeking works properly.
 
-`/resolve` filters what it offers to what a 3B+ can actually decode: H.264,
-1080p max, no HEVC/VP9/AV1. That is the same constraint as everywhere else in
-this project, applied at the point where a stream gets chosen — a 2160p HEVC
-remux is not "better quality" on this box, it is a slideshow. Override per
-call with `?max_height=` / `?allow_hevc=true` if you ever run it against
-something bigger.
+### Reviews and full credits (optional TMDB key)
 
-Prior to July 2026 there was a separate STREAMING tile running
-`jellyfin-mpv-shim` as a phone-cast target. It is gone — the remote drives
-everything now, so there is no longer a mode where you need a second
-device in your hand to choose something to watch. Nothing stops you
-putting it back on the APPS tile if you want casting again.
+Cinemeta gives a director, a writer and three cast for free, and no
+reviews. For the producer, five cast and three user reviews with star
+ratings you need a TMDB key — the only key this project wants.
+
+```bash
+# server/config.local.json — untracked, survives git pull
+{ "tmdb_key": "your-key-here" }
+```
+
+Free at [themoviedb.org](https://www.themoviedb.org/settings/api). It
+does not expire and there is no OAuth flow, which is why it is an
+acceptable exception on a box with no keyboard. Without it the panel
+simply shows the keyless set and the reviews block does not render.
+
+## News
+
+Time.mk across the top half, one scrolling row per category
+(`makedonija`, `skopje`, `sport`, `kultura`, `svet`, `ekonomija`), and
+Θεσσαλονίκη across the bottom. Headlines are never wrapped — one row
+each, always.
+
+Feeds are proxied through `server.py` (`GET /news?url=`) because the
+browser cannot fetch them directly, behind a host allowlist in
+`server/feeds.py` so the proxy is not an open relay.
+
+**Greek sources keep dying.** pressdisplay, then in.gr, then
+thestival.gr — which went behind a Cloudflare challenge and answers 403
+to anything that is not a browser. It is `makthes.gr` now, which works
+but publishes no category tags, so the bottom half is one row rather than
+several. Expect to change it again.
+
+## Weather
+
+Skopje, Ljubljana and Θεσσαλονίκη — three fixed identities in
+`launcher/app.js`, deliberately *not* the box's own coordinates from
+`config.json`. Current temperature, condition, feels-like and wind, plus
+three days with highs, lows and rain probability. Open-Meteo, no key.
 
 ## Music
 
@@ -430,30 +504,30 @@ binary exists:
 
 ```
 tiles
-  tv         bash /home/petar/nothing-htpc/cabletv/cabletv.sh
-  music      view 'music' — launches no process
+  (none — every screen is in the launcher page)
 ```
 
 Then it streams the whole session into the one terminal, tagged by
 process, and to a log file (`--log=FILE`, otherwise `/tmp/htpc-dev-*.log`):
 
 ```
-server | 21:04:11 [launch] tv -> bash /home/petar/nothing-htpc/cabletv/cabletv.sh
-server | 21:04:11 [tv] bash: /home/petar/nothing-htpc/cabletv/cabletv.sh: No such file or directory
-server | 21:04:11 [app] tv exited on its own after 0.0s (exit code 127)
-server | 21:04:11 [app] tv died immediately — the [tv] lines above are why
+server | 21:04:11 [server] listening on 127.0.0.1:8484  (debug=on)
+mpv    | [shim] htpc shim loaded — this script draws no UI
+server | 21:04:19 [player] load http://…/mrt1.m3u8 (live)
+server | 21:04:20 [play] movie tt0816692 -> Torrentio 1080p x264 👤 2081
 ```
 
 **A tile that opens and closes again is this, every time.** The backend
-used to send launched apps to `/dev/null`; now it relays their output
-line by line, tagged with the tile id, and logs how and when they died —
-on the Pi that lands in `journalctl -u htpc-session` too. `/status` also
-carries a `last_exit` field with the id, exit code and how long it ran.
+relays a launched process's output line by line, tagged with the tile id,
+and logs how and when it died — on the Pi that lands in
+`journalctl -u htpc-session` too. `/status` carries a `last_exit` field
+with the id, exit code and how long it ran. (With the tile list empty
+this matters less than it did, but the machinery is still there for
+whatever gets added next.)
 
-`HTPC_DEBUG=1` is what turns the tagging, the HTTP access log and
-Chromium's `--enable-logging=stderr` on; dev-session sets it for you
-(`--quiet` doesn't). `CABLETV_DEBUG=1` additionally puts mpv at
-`--msg-level=all=v`, which is where stream and decoder failures show up.
+`HTPC_DEBUG=1` turns on the tagging, the HTTP access log and Chromium's
+`--enable-logging=stderr`; dev-session sets it for you (`--quiet`
+doesn't).
 
 Two things dev-session cleans up that the service gets from systemd: it
 kills the backend and daemons on the way out (so the next run does not
@@ -470,14 +544,36 @@ On Debian/Ubuntu: `sudo apt install cage chromium mpv foot`.
 running just the backend, and you open `http://127.0.0.1:8484` in any
 browser — everything except the kiosk shell works there.
 
-Syntax checks, no display needed:
+### The test suite
+
+Everything checkable without a Pi, a TV or a CEC line:
 
 ```bash
-python3 -m py_compile server/server.py daemon/*.py cabletv/gen_static.py
-bash -n system/*.sh cabletv/cabletv.sh
-luac5.4 -p cabletv/cabletv.lua
-python3 -c "import json; json.load(open('server/config.json'))"
+test/run-all.sh
 ```
+
+That is syntax for every language in the repo, 36 backend tests
+(`python3 -m unittest discover -s test`), and 56 UI render tests that
+load the real launcher in headless Chromium and assert what each screen
+drew — which is the only way to catch the failure mode that matters here,
+where a JS exception during boot leaves a black screen that looks exactly
+like a working box showing a black screen.
+
+```bash
+test/test_ui.sh --shots /tmp/shots     # also writes a PNG per screen
+```
+
+The UI tests use `?fixtures=1`, a developer flag that stands in for the
+HTTP calls a laptop cannot make. It never fakes a launch or a stream.
+`?view=`, `?sel=` and `?detail=1` navigate to a screen without a gamepad.
+
+It also fails the build if a hex colour or an English string appears in
+`app.js` — those belong in `theme.json`, and a value that is not in the
+theme is a value a reskin cannot reach.
+
+**What it cannot cover, and never claims to:** HDMI-CEC, V4L2 hardware
+decode, thermal throttling, power delivery, and the transparent-Chromium-
+over-mpv layering. Do not "fix" any of those based on what it says.
 
 Backend smoke test:
 
@@ -545,12 +641,33 @@ with splash screens may need a tiny sleep-wrapper.
 **Controller dead in the launcher:** press any button once — the browser
 Gamepad API only exposes pads after first input.
 
-**Cable TV static is choppy.** Every static frame is an uncompressed
-screenful of BGRA handed to mpv — 8.3 MB at 1080p — so the frame rate is
-straight memory bandwidth. `cabletv.sh` already drops to 15 fps on machines
-under 1.5 GB; if you overrode `CABLETV_STATIC_FPS`, that is why. The noise
-field itself is generated once per resolution into `~/.cache/cabletv/`
-(12 MB at 1080p); delete it to force a regenerate.
+**The UI is up but the picture never appears.** This is the one
+architectural risk in the remodel. The page is composited over mpv and
+relies on Chromium handing Wayland a transparent surface; if it does not,
+you get the interface painted on black with the video invisible behind
+it. Check mpv is actually running and playing:
+
+```bash
+ls -l "$XDG_RUNTIME_DIR/htpc-mpv.sock"
+curl -s localhost:8484/player/state
+```
+
+If `state` reports a path and a moving position, the player is fine and
+this is the layering. The documented fallback is to drop
+`--enable-transparent-visuals` and give mpv a geometry the page reserves
+instead — the UI code is identical either way. See
+[REMODEL.md](REMODEL.md).
+
+**MOVIES says "torrserver is not running".** It is optional and not
+installed by `install.sh`. See the Movies section.
+
+**MOVIES says "no streams found".** Usually the addon host, not the film.
+`torrentio.strem.io` is dead; the default list is
+`torrentio.strem.fun,comet.elfhosted.com`. Check with:
+
+```bash
+python3 server/stremio.py streams tt0816692
+```
 
 ---
 
@@ -580,8 +697,11 @@ works, with three differences:
    PC and woke it from the 8BitDo dongle; the udev rule for that is kept,
    commented out, at the bottom of `system/99-htpc-input.rules`.
 3. **GAMING** was a tile here (`steam -gamepadui`, optionally under
-   gamescope). It is gone from the launcher and the config — restore it by
-   adding an app entry with id `gaming` and an icon in `launcher/index.html`.
+   gamescope). It is gone from the launcher and the config. The tile model
+   is deliberately kept general enough to take it back: add an entry to
+   `apps` in the config, an icon and a `TILES` row in `launcher/app.js`.
 
-None of the memory tuning hurts on a big machine; `cabletv.sh` detects
-RAM and skips it.
+The x86 build is also where the remodel is most comfortable. Drop the
+`pi3` profile, raise `HTPC_MAX_HEIGHT`, set `HTPC_ALLOW_HEVC=1`, and the
+whole playback envelope in CLAUDE.md constraint 11 relaxes — those limits
+are a 3B+ fact, not a design position.

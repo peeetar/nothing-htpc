@@ -210,7 +210,9 @@ channel, browses a poster grid and draws the weather.
 
 ## Status
 
-Built and green on a dev machine; **nothing has run on the Pi yet.**
+**Merged to main on 30 July 2026.** Built and green on a dev machine;
+**nothing has run on the Pi yet.** The last commit of the old design is tagged
+`pre-remodel` — `git checkout pre-remodel` is the whole rollback.
 
 Done:
 
@@ -239,9 +241,19 @@ Not done:
 - TorrServer is not installed or tested anywhere
 - SHOWS uses the movie catalogue path end to end but series stream selection
   (which episode file) is untested
-- The old code is still on disk. Nothing is deleted until the new path plays
-  a channel on the Pi
-- README.md, cabletv/README.md and install.sh still describe the old world
+- No screen has been driven with a real gamepad or a real TV remote
+
+Done since, on merge: the old code is deleted (`cabletv.lua`, `cabletv.sh`,
+`input.conf`, `gen_static.py`, `fonts/`, `ee3resolve.py`, `torrentstream.sh`,
+`library.tsv`, `movieapi.py`, `ee3-api.service`), and README.md,
+cabletv/README.md, CLAUDE.md, install.sh, dev-session.sh and both configs
+describe the new world.
+
+The original plan said nothing would be deleted until the new path played a
+channel on the Pi. That order was reversed at the owner's request so the box
+could be configured from a clean `main` — which means **the Pi's next
+`git pull` lands code that has never run on it.** `pre-remodel` exists for
+exactly that reason.
 
 ## Constraints from CLAUDE.md that this rebuild retires
 
