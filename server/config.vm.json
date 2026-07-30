@@ -1,33 +1,10 @@
 {
-  "_note": "Stand-in apps for testing the launch/kill/home loop on a dev machine or VM, without installing the real clients. Used by system/dev-session.sh --vm via HTPC_CONFIG, so it never overwrites a deployed config.json. Needs: mpv foot htop",
+  "_note": "Dev-machine config, used by system/dev-session.sh --vm via HTPC_CONFIG so it never overwrites a deployed config.json. Since the July 2026 remodel there is nothing here to launch — every screen lives in the launcher page — so this exists to point the home screen's weather somewhere and to prove the config precedence still works. To exercise the player without a real stream, tune the launcher to a channel whose URL is `av://lavfi:smptebars=size=1280x720:rate=30` in cabletv/channels.m3u.",
   "weather": {
     "lat": 41.117,
     "lon": 20.802,
     "_note": "Weather works anywhere with internet."
   },
-  "apps": [
-    {
-      "id": "tv",
-      "label": "TV",
-      "command": ["mpv", "--fs", "--loop", "av://lavfi:smptebars=size=1280x720:rate=30"],
-      "_note": "SMPTE color bars stand in for the whole TV tile — live channels and the on-demand library both live behind it now. Point this at $HTPC_DIR/cabletv/cabletv.sh to test the real thing."
-    },
-    {
-      "id": "music",
-      "label": "MUSIC",
-      "command": ["mpv", "--fs", "--loop", "av://lavfi:sine=frequency=440", "--force-window"],
-      "_note": "440Hz tone proves audio + launch/kill work."
-    },
-    {
-      "id": "apps",
-      "label": "APPS",
-      "command": ["foot", "-F", "htop"],
-      "_note": "apt install htop foot"
-    },
-    {
-      "id": "settings",
-      "label": "SETTINGS",
-      "command": ["foot", "-F", "htop"]
-    }
-  ]
+  "tmdb_key": "",
+  "apps": []
 }

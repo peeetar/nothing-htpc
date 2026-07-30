@@ -7,7 +7,7 @@ Runs inside the cage Wayland session so launched apps inherit
 WAYLAND_DISPLAY and appear fullscreen over the launcher.
 
 Endpoints:
-  GET  /              launcher UI
+  GET  /              launcher UI (and its module assets)
   GET  /config        apps + weather config (JSON)
   POST /launch/<id>   kill current app, start the requested one
   POST /home          kill current app (return to launcher)
@@ -15,9 +15,22 @@ Endpoints:
   GET  /music/status  what spotifyd is playing (via playerctl/MPRIS)
   GET  /music/art     album art, proxied so the page can dither it on canvas
   POST /music/<cmd>   playpause | next | previous
+  GET  /channels      live TV channels from cabletv/channels.m3u
+  GET  /catalog/<k>   movie|show catalogue from Cinemeta
+  GET  /meta/<k>/<id> one title's full metadata
+  POST /play          resolve a title through Torrentio and hand it to mpv
+  POST /player/load   play a URL (live TV)
+  POST /player/stop   back to idle
+  GET  /player/state  position, buffering, what is loaded
+  GET  /news?url=     RSS proxy — the page cannot fetch time.mk itself
 
 Stdlib only — no dependencies. The music endpoints shell out to playerctl
-rather than importing a D-Bus binding, which keeps that true.
+rather than importing a D-Bus binding, and the catalogue talks to the Stremio
+addon protocol over plain HTTP, which keeps that true.
+
+The player endpoints exist because a web page cannot open a unix socket. mpv
+runs beside this process with --idle and an IPC socket; the UI is composited
+above it, so there is no launch and no black frame between menu and picture.
 """
 
 import json
@@ -28,16 +41,54 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import channels as channels_mod       # noqa: E402
+import feeds                          # noqa: E402
+import mpvipc                         # noqa: E402
+import stremio                        # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 # The repo root, found from this file rather than configured. Everything the
 # box runs lives under it, so the checkout works wherever it happens to sit —
 # ~/nothing-htpc, /opt/htpc, a USB stick — with no path baked in anywhere.
 HTPC_DIR = ROOT.parent
-UI = HTPC_DIR / "launcher" / "index.html"
+LAUNCHER = HTPC_DIR / "launcher"
+UI = LAUNCHER / "index.html"
+
+# The UI is no longer one file: it is index.html plus the theme and the module
+# that reads it. Only these extensions are served, and only from launcher/ —
+# a path is resolved and then checked to be inside that directory, so `..`
+# cannot walk out of it.
+STATIC_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js":   "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".css":  "text/css; charset=utf-8",
+    ".svg":  "image/svg+xml",
+    ".woff2": "font/woff2",
+    ".png":  "image/png",
+}
+
+
+def static_file(path):
+    """-> (bytes, content-type) or (None, None). Never escapes launcher/."""
+    rel = path.lstrip("/") or "index.html"
+    ext = os.path.splitext(rel)[1].lower()
+    if ext not in STATIC_TYPES:
+        return None, None
+    try:
+        target = (LAUNCHER / rel).resolve()
+        target.relative_to(LAUNCHER.resolve())
+    except (ValueError, OSError):
+        return None, None
+    if not target.is_file():
+        return None, None
+    return target.read_bytes(), STATIC_TYPES[ext]
 
 
 def _config_path():
@@ -56,7 +107,9 @@ def _config_path():
 
 
 CONFIG_PATH = _config_path()
-PORT = 8484
+# 8484 everywhere real. HTPC_PORT exists so the test suite can start a second
+# server on a scratch port without colliding with a running session.
+PORT = int(os.environ.get("HTPC_PORT") or 8484)
 
 # HTPC_DEBUG=1 adds HTTP request lines and per-poll music noise. Everything
 # else below logs unconditionally: a foreground app that dies on its own used
@@ -271,14 +324,12 @@ def _expand(cmd):
 
 
 def _child_env(cfg=None):
-    # Launched apps get HTPC_DIR too, so a script started from a tile can find
-    # its siblings the same way (cabletv.sh resolves its own dir, but anything
-    # a user wires into a tile shouldn't have to).
+    # Launched apps get HTPC_DIR, so a script wired into a tile can find its
+    # siblings without having a path baked into it.
     #
-    # `weather` in config.json is NOT handed down any more: it is the box's own
-    # location, for the launcher's home screen, and teletext 992 stopped being
-    # about where the box is in July 2026 - it is a fixed three-city forecast
-    # with its own list in cabletv.lua.
+    # `weather` in config.json is NOT handed down: it is the box's own
+    # location, for the launcher's home screen only. The WEATHER screen is a
+    # fixed three-city forecast with its own list in launcher/app.js.
     env = dict(os.environ)
     env["HTPC_DIR"] = str(HTPC_DIR)
     return env
@@ -359,11 +410,44 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        path, _, query = self.path.partition("?")
+        q = urllib.parse.parse_qs(query)
+
+        if path in ("/", "/index.html"):
             self._send(200, UI.read_bytes(), "text/html; charset=utf-8")
-        elif self.path == "/config":
+        elif path == "/channels":
+            self._send(200, channels_mod.load())
+        elif path.startswith("/catalog/"):
+            kind = path.split("/catalog/", 1)[1]
+            try:
+                self._send(200, stremio.catalog(kind, skip=int(q.get("skip", ["0"])[0])))
+            except (stremio.StremioError, ValueError) as e:
+                log("catalog", "%s: %s" % (kind, e))
+                self._send(502, {"ok": False, "msg": str(e)})
+        elif path.startswith("/meta/"):
+            parts = path.split("/")
+            if len(parts) != 4:
+                self._send(400, {"ok": False, "msg": "usage: /meta/<kind>/<id>"})
+                return
+            try:
+                self._send(200, stremio.meta(parts[2], parts[3]))
+            except stremio.StremioError as e:
+                self._send(502, {"ok": False, "msg": str(e)})
+        elif path == "/player/state":
+            self._send(200, mpvipc.state())
+        elif path == "/news":
+            url = (q.get("url") or [""])[0]
+            try:
+                self._send(200, feeds.fetch(url))
+            except feeds.FeedError as e:
+                # 200 with an error field, not a 5xx: the news screen draws
+                # one row per source and a broken source is a row that says
+                # so, not a screen that fails to open.
+                log("news", "%s: %s" % (url or "(no url)", e))
+                self._send(200, {"items": [], "error": str(e)})
+        elif path == "/config":
             self._send(200, load_config())
-        elif self.path == "/status":
+        elif path == "/status":
             with state_lock:
                 running = current["proc"] is not None and current["proc"].poll() is None
                 self._send(200, {
@@ -373,29 +457,101 @@ class Handler(BaseHTTPRequestHandler):
                     # again is readable over HTTP, not just on the console.
                     "last_exit": dict(last_exit),
                 })
-        elif self.path == "/music/status":
+        elif path == "/music/status":
             self._send(200, music_status())
-        elif self.path.split("?", 1)[0] == "/music/art":
+        elif path == "/music/art":
             data, ctype = music_art()
             if data:
                 self._send(200, data, ctype)
             else:
                 self._send(404, {"error": "no art"})
         else:
-            self._send(404, {"error": "not found"})
+            body, ctype = static_file(path)
+            if body is not None:
+                self._send(200, body, ctype)
+            else:
+                self._send(404, {"error": "not found"})
+
+    def _body(self):
+        """Read a JSON request body. An unparseable one is {} — every caller
+        below validates the fields it needs anyway, and a 400 with a sentence
+        beats a traceback in the journal."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return {}
+        if n <= 0:
+            return {}
+        try:
+            return json.loads(self.rfile.read(min(n, 1_000_000)) or b"{}")
+        except (ValueError, OSError):
+            return {}
 
     def do_POST(self):
         global home_seq
-        if self.path.startswith("/launch/"):
-            ok, msg = launch(self.path.split("/launch/", 1)[1])
+        path = self.path.partition("?")[0]
+
+        if path == "/player/load":
+            body = self._body()
+            url = body.get("url")
+            if not url:
+                self._send(400, {"ok": False, "msg": "no url"})
+                return
+            try:
+                mpvipc.load(url)
+                log("player", "load %s (%s)" % (url[:90], body.get("kind") or "?"))
+                self._send(200, {"ok": True})
+            except mpvipc.MpvError as e:
+                log("player", "load failed: %s" % e)
+                self._send(502, {"ok": False, "msg": str(e)})
+            return
+
+        if path == "/player/stop":
+            try:
+                mpvipc.stop()
+                self._send(200, {"ok": True})
+            except mpvipc.MpvError as e:
+                self._send(502, {"ok": False, "msg": str(e)})
+            return
+
+        if path == "/play":
+            body = self._body()
+            kind, title_id = body.get("kind", "movie"), body.get("id")
+            if not title_id:
+                self._send(400, {"ok": False, "msg": "no id"})
+                return
+            try:
+                # Torrentio is asked at play time, never at browse time: a
+                # stream URL minted now is stale in minutes, so baking one
+                # into the catalogue would guarantee a dead link by the time
+                # anyone pressed OK.
+                url, label = stremio.resolve(kind, title_id)
+                log("play", "%s %s -> %s" % (kind, title_id, label))
+                mpvipc.load(url)
+                self._send(200, {"ok": True, "msg": label})
+            except (stremio.StremioError, mpvipc.MpvError) as e:
+                log("play", "%s %s failed: %s" % (kind, title_id, e))
+                self._send(502, {"ok": False, "msg": str(e)})
+            return
+
+        if path.startswith("/launch/"):
+            ok, msg = launch(path.split("/launch/", 1)[1])
             self._send(200 if ok else 400, {"ok": ok, "msg": msg})
-        elif self.path == "/home":
+        elif path == "/home":
             log("home", "return to launcher")
             kill_current()
+            # Whatever was playing stops too. /home means "return to the
+            # launcher", and mpv left playing under a menu is audio from a
+            # channel nobody can see. Failures are ignored: mpv not being up
+            # is not a reason for the home button to report an error.
+            try:
+                mpvipc.stop()
+            except mpvipc.MpvError:
+                pass
             home_seq += 1
             self._send(200, {"ok": True})
-        elif self.path.startswith("/music/"):
-            cmd = self.path.split("/music/", 1)[1]
+        elif path.startswith("/music/"):
+            cmd = path.split("/music/", 1)[1]
             if cmd not in ("playpause", "next", "previous"):
                 self._send(400, {"ok": False, "msg": f"unknown music command '{cmd}'"})
             elif not PLAYERCTL:

@@ -27,7 +27,49 @@ tag() {
 # in 8K clumps long after the thing they describe.
 PY=(python3 -u)
 
-# Backend (launches/kills apps)
+# --- the video layer --------------------------------------------------------
+#
+# mpv starts FIRST and stays running for the whole session, idle when nothing
+# is on. Two reasons it is not launched per-channel any more:
+#
+#   1. cage raises the newest window, so the UI has to be the newest window.
+#      mpv first, Chromium second, and the page composites on top.
+#   2. Starting a player per channel is what put a black frame between the
+#      menu and the picture. Idle mpv has nothing to start.
+#
+# It draws no UI of its own — no OSC, no OSD, no default keybindings. Every
+# pixel of interface is the page above it. shim.lua handles only the things
+# that are awkward to see from the other side of an IPC socket: a stream that
+# fails, and a retry.
+export MPV_IPC_SOCKET="${MPV_IPC_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/htpc-mpv.sock}"
+rm -f "$MPV_IPC_SOCKET"
+
+MPV_ARGS=(
+  --idle=yes
+  --input-ipc-server="$MPV_IPC_SOCKET"
+  --fullscreen
+  --no-osc --no-osd-bar --osd-level=0
+  --no-input-default-bindings
+  --input-vo-keyboard=no
+  --keep-open=no
+  --force-window=yes
+  --background-color='#000000'
+  --script="$HTPC_DIR/cabletv/shim.lua"
+  # A 1GB box cannot buffer like a desktop. These are the numbers the old
+  # cabletv.sh arrived at and they are still the right ones.
+  --cache=yes
+  --demuxer-max-bytes=32MiB
+  --demuxer-max-back-bytes=16MiB
+  --hwdec=auto-safe
+)
+
+if command -v mpv >/dev/null; then
+  tag mpv mpv "${MPV_ARGS[@]}"
+else
+  echo "session | mpv is not installed — TV and MOVIES will not play" >&2
+fi
+
+# Backend (launches/kills apps, and bridges the page to mpv's IPC socket)
 tag server "${PY[@]}" "$HTPC_DIR/server/server.py"
 
 # Home-button daemon (hold guide button -> return to launcher)
@@ -67,6 +109,18 @@ CHROME_ARGS=(
   --disable-background-networking
   --disable-component-update
   --js-flags="--max-old-space-size=64"
+  # Transparency. The page is composited over mpv, so where the UI paints
+  # nothing the video has to show through. This is the load-bearing and
+  # least-proven part of the whole architecture (see REMODEL.md): Chromium
+  # normally composites onto an opaque surface, and whether it will hand
+  # Wayland an ARGB one is a per-platform question.
+  #
+  # If the picture never appears and the UI sits on black, this is why. The
+  # documented fallback is to stop asking for transparency and give mpv a
+  # geometry the page reserves instead — the UI code is identical either way,
+  # which is what makes being wrong here cheap.
+  --enable-transparent-visuals
+  --default-background-color=00000000
 )
 
 if [ -n "$DEBUG" ]; then

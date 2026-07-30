@@ -8,13 +8,10 @@ __pycache__/
 # server/config.json when it exists.
 server/config.local.json
 
-# ee3 daemon credentials (EE3_USERNAME / EE3_PASSWORD). Lives on the LXC, not
-# the Pi, and must never end up in the repo — movieapi.py reads it via
-# EE3_ENV_FILE.
+# The old ee3 catalogue cache and its credentials. Both are gone as of the
+# July 2026 remodel — the catalogue is a live Cinemeta call with an in-memory
+# TTL, and there is no login anywhere any more. Kept ignored so an old working
+# copy that still has these files does not offer them up on the next commit.
 server/ee3.env
 *.tsv.tmp
-
-# On-demand catalogue cache. cabletv.lua refreshes this from the ee3 daemon
-# (ee3resolve.py --library) whenever 993 is opened with no cache or a stale
-# one, so a tracked copy would make every "git pull" on the box a conflict.
 cabletv/library.tsv

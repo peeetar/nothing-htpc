@@ -1,0 +1,203 @@
+{
+  "_note": "THE ONE FILE. Every colour, size, spacing, duration, layout constant and user-facing string in the product. Changing this restyles the whole box; nothing else should need touching. Loaded by launcher/theme.js, which stamps `tokens` onto :root as CSS custom properties and hands `motion`, `layout` and `copy` to JS. Keys become CSS vars by their path: tokens.color.ink -> --ink, tokens.size.bar -> --size-bar. Comments live in _note keys, the way server/config.json already does it.",
+
+  "name": "NOTHING",
+
+  "tokens": {
+    "color": {
+      "_note": "Pure black, one ink, one red accent. The greys are a ladder, not a palette — dim for secondary text, faint for tertiary, rule for hairlines, panel for the only non-black surface. Adding a second accent is how this stops looking like a Nothing product.",
+      "bg": "#000000",
+      "ink": "#EDEDED",
+      "dim": "#6B6B6B",
+      "faint": "#2A2A2A",
+      "red": "#D71921",
+      "rule": "#1F1F1F",
+      "panel": "#0D0D0D",
+      "dot-off": "rgba(255,255,255,0.045)",
+      "scrim": "rgba(0,0,0,0.72)"
+    },
+
+    "font": {
+      "_note": "Two roles. Display is the dot-matrix engine (drawn, not typed — constraint 8 forbids font CDNs), used for the clock, channel numbers and headings; it is Latin-only and that is fine because it only ever carries numbers and short uppercase words. Body carries content — Macedonian Cyrillic and Greek included — so it must have real coverage. The stack below resolves to system faces today; ship a woff2 here before this leaves the house.",
+      "body": "ui-monospace, 'SF Mono', 'Cascadia Mono', 'JetBrains Mono', Menlo, Consolas, monospace",
+      "display": "__dots__"
+    },
+
+    "size": {
+      "_note": "clamp() triples as min/preferred/max. The box runs at one resolution, but dev happens in a window, so nothing is allowed to be a fixed pixel value.",
+      "micro": "clamp(9px, 0.85vw, 12px)",
+      "small": "clamp(10px, 1vw, 13px)",
+      "base": "clamp(11px, 1.2vw, 15px)",
+      "large": "clamp(13px, 1.5vw, 19px)",
+      "title": "clamp(16px, 2vw, 26px)"
+    },
+
+    "track": {
+      "_note": "Letterspacing. Uppercase mono at these tracking values is the label voice of the whole UI.",
+      "tight": "0.18em",
+      "label": "0.32em",
+      "wide": "0.45em"
+    },
+
+    "space": {
+      "_note": "A scale, not arbitrary values. Everything in the UI picks from this ladder.",
+      "1": "0.6vh",
+      "2": "1.2vh",
+      "3": "2.2vh",
+      "4": "3.2vh",
+      "5": "4.5vh",
+      "pad-y": "4.5vh",
+      "pad-x": "5vw"
+    },
+
+    "line": {
+      "_note": "Hairlines only. This UI has no borders thicker than a rule and no radii — a rounded card is the single fastest way to make it look like a streaming app.",
+      "hair": "1px",
+      "radius": "0"
+    },
+
+    "glow": {
+      "_note": "Selection is a white glow, not a coloured edge. A red bar under the selected poster read as a progress indicator and fought with the artwork; light coming off the card reads as focus and works over any poster. The red accent is spent on the one dot that marks state, nowhere else.",
+      "card": "0 0 2.4vh rgba(255,255,255,0.42)",
+      "card-tight": "0 0 0.6vh rgba(255,255,255,0.30)"
+    },
+
+    "fade": {
+      "_note": "Edge masks, as a percentage of the element's width. The news marquee fades out before it reaches its category label rather than sliding under it — 3% is enough to read as a fade and not as a cut.",
+      "edge": "3%"
+    }
+  },
+
+  "motion": {
+    "_note": "Expressive but restrained: things assemble rather than slide, and nothing bounces. Durations are milliseconds. The pi3 profile cuts these; see profiles.",
+    "instant": 0,
+    "quick": 160,
+    "view": 240,
+    "veil": 350,
+    "toast": 300,
+    "bar-hold": 5000,
+    "dot-stagger": 14,
+    "dot-assemble": 420,
+    "marquee-px-per-s": 42,
+    "grid-scroll": 320,
+    "review-hold": 7000,
+    "review-fade": 700,
+    "ease": "cubic-bezier(.2,.9,.3,1)",
+    "ease-out": "ease",
+    "breathe": 4000
+  },
+
+  "layout": {
+    "_note": "Structure, not style. Changing these re-proportions screens without touching their code.",
+    "bar-height": "12vh",
+    "bar-number-dot": 5.5,
+    "grid-columns": 6,
+    "grid-gap": "1.4vw",
+    "poster-aspect": "2 / 3",
+    "_note-posters": "A page is `grid-rows-per-page` rows deep; the viewport shows however many fit (two, at 1080p with six columns) and scrolls through the rest. Reaching the bottom of a page turns to the next one. This is a memory budget as much as a layout one — every card is a real image decode.",
+    "grid-rows-per-page": 5,
+    "posters-in-flight": 30,
+    "grid-offset": "10px",
+    "detail-poster-width": "26vw",
+    "detail-reviews": 3,
+    "detail-cast": 5,
+    "clock-dot-scale": 0.0145,
+    "menu-dot-scale": 0.0018,
+    "menu-gap": "2.2vw",
+    "news-rows-top": 4,
+    "news-rows-bottom": 1,
+    "weather-days": 3,
+    "channel-list-rows": 9
+  },
+
+  "copy": {
+    "_note": "Every user-facing string. Localisation lives here; nothing in the code hardcodes English.",
+    "greeting": {
+      "night": "LATE NIGHT",
+      "morning": "GOOD MORNING",
+      "afternoon": "GOOD AFTERNOON",
+      "evening": "GOOD EVENING"
+    },
+    "tiles": {
+      "tv": "TV",
+      "movies": "MOVIES",
+      "shows": "SHOWS",
+      "news": "NEWS",
+      "weather": "WEATHER",
+      "music": "MUSIC"
+    },
+    "hints": {
+      "navigate": "NAVIGATE",
+      "open": "OPEN",
+      "back": "BACK",
+      "home": "RETURN HOME",
+      "channel": "CHANNEL",
+      "play": "PLAY",
+      "playpause": "PLAY / PAUSE",
+      "track": "TRACK"
+    },
+    "state": {
+      "connecting": "CONNECTING",
+      "offline": "BACKEND OFFLINE · CHECK SERVER",
+      "loading": "LOADING",
+      "resolving": "RESOLVING",
+      "buffering": "BUFFERING",
+      "no-signal": "NO SIGNAL",
+      "empty": "NOTHING HERE",
+      "unavailable": "UNAVAILABLE",
+      "idle": "IDLE",
+      "playing": "PLAYING",
+      "paused": "PAUSED"
+    },
+    "music": {
+      "header": "SPOTIFY CONNECT",
+      "nothing": "NOTHING PLAYING",
+      "prompt": "START SPOTIFY ON YOUR PHONE",
+      "speaker": "THIS BOX IS THE SPEAKER",
+      "no-player": "NO PLAYER",
+      "no-playerctl": "PLAYERCTL IS NOT INSTALLED",
+      "now": "NOW PLAYING"
+    },
+    "news": {
+      "top-source": "TIME.MK",
+      "bottom-source": "ΜΑΚΕΔΟΝΙΑ",
+      "bottom-region": "ΘΕΣΣΑΛΟΝΙΚΗ"
+    },
+    "weather": {
+      "today": "TODAY",
+      "feels": "FEELS LIKE",
+      "now": "NOW",
+      "wind": "WIND",
+      "rain": "RAIN",
+      "sun": "SUN"
+    },
+    "detail": {
+      "director": "DIRECTOR",
+      "producer": "PRODUCER",
+      "writer": "WRITER",
+      "cast": "CAST",
+      "reviews": "REVIEWS",
+      "no-reviews": "NO REVIEWS",
+      "page": "PAGE"
+    }
+  },
+
+  "profiles": {
+    "_note": "Hardware profiles. The base values above target x86; `pi3` is what keeps the original Raspberry Pi 3B+ alive — less motion, fewer images in flight, no marquee. Selected by theme.js from ?profile= or the backend's config.",
+    "pi3": {
+      "motion": {
+        "dot-assemble": 0,
+        "dot-stagger": 0,
+        "marquee-px-per-s": 24,
+        "view": 180
+      },
+      "layout": {
+        "grid-columns": 4,
+        "grid-rows-per-page": 4,
+        "posters-in-flight": 16,
+        "news-rows-top": 2,
+        "detail-reviews": 2
+      }
+    }
+  }
+}

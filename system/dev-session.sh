@@ -88,27 +88,35 @@ fi
 # Cheap, and it turns "the session died on startup" into one line naming a
 # file and a line number.
 hdr "syntax"
-if python3 -m py_compile "$HTPC_DIR/server/server.py" "$HTPC_DIR"/daemon/*.py \
-     "$HTPC_DIR/cabletv/gen_static.py" 2>&1; then
-  ok "python (server, daemons, gen_static)"
+if python3 -m py_compile "$HTPC_DIR/server/"*.py "$HTPC_DIR"/daemon/*.py 2>&1; then
+  ok "python (server, daemons)"
 else
   bad "python syntax error above"
 fi
 
-if bash -n "$HTPC_DIR"/system/*.sh "$HTPC_DIR/cabletv/cabletv.sh" 2>&1; then
-  ok "bash (system/*.sh, cabletv.sh)"
+if bash -n "$HTPC_DIR"/system/*.sh 2>&1; then
+  ok "bash (system/*.sh)"
 else
   bad "bash syntax error above"
 fi
 
 if command -v luac5.4 >/dev/null; then
-  if luac5.4 -p "$HTPC_DIR/cabletv/cabletv.lua" 2>&1; then
-    ok "lua (cabletv.lua)"
+  if luac5.4 -p "$HTPC_DIR/cabletv/shim.lua" 2>&1; then
+    ok "lua (shim.lua)"
   else
-    bad "cabletv.lua does not compile — LIVE TV would open and die instantly"
+    bad "shim.lua does not compile — mpv would run with no failure handling"
   fi
 else
-  warn "luac5.4 not installed — cabletv.lua unchecked (dnf/apt install lua5.4)"
+  warn "luac5.4 not installed — shim.lua unchecked (dnf/apt install lua5.4)"
+fi
+
+# The theme is the whole UI's source of truth; a trailing comma in it is a
+# black screen on the TV and nothing in the journal.
+if python3 -c "import json,sys; json.load(open(sys.argv[1]))" \
+     "$HTPC_DIR/launcher/theme.json" 2>&1; then
+  ok "json (launcher/theme.json)"
+else
+  bad "theme.json is not valid JSON — the launcher would load to a black screen"
 fi
 
 # cage execs this directly, so a missing exec bit kills the session before a
@@ -173,14 +181,25 @@ PY
 # --- tools ------------------------------------------------------------------
 hdr "tools"
 KIOSK=1
-for bin in cage chromium; do
-  if command -v "$bin" >/dev/null; then
-    ok "$bin  ${D}$("$bin" --version 2>&1 | head -1)${Z}"
-  else
-    warn "$bin missing — falling back to backend-only"
-    KIOSK=0
-  fi
+if command -v cage >/dev/null; then
+  ok "cage  ${D}$(cage --version 2>&1 | head -1)${Z}"
+else
+  warn "cage missing — falling back to backend-only"
+  KIOSK=0
+fi
+
+# Fedora ships the binary as chromium-browser, Debian as chromium. Probing
+# only one of them reported "missing" on a machine that had it.
+CHROMIUM=""
+for c in chromium chromium-browser google-chrome google-chrome-stable; do
+  command -v "$c" >/dev/null && CHROMIUM="$c" && break
 done
+if [ -n "$CHROMIUM" ]; then
+  ok "$CHROMIUM  ${D}$("$CHROMIUM" --version 2>&1 | head -1)${Z}"
+else
+  warn "chromium missing — falling back to backend-only"
+  KIOSK=0
+fi
 for bin in mpv playerctl foot spotifyd; do
   if command -v "$bin" >/dev/null; then
     ok "$bin  ${D}$("$bin" --version 2>&1 | head -1)${Z}"

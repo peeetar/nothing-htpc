@@ -47,9 +47,12 @@ except ImportError:
 
 # CEC user-control code -> key to synthesise.
 #
-# These land on the bindings that already exist: the launcher reads
-# ArrowLeft/ArrowRight/Enter, and cabletv/input.conf reads UP/DOWN/LEFT/RIGHT,
-# PGUP/PGDWN, ENTER, ESC, the digits, t (guide) and x (keypad).
+# These land on the bindings that already exist. Since the July 2026 remodel
+# there is only one consumer — the launcher page reads arrows, Enter, Escape,
+# Backspace, PageUp/PageDown and the digits, and routes them by whichever
+# screen is up. mpv has no keybindings at all any more (it is started with
+# --no-input-default-bindings and draws no UI), so nothing here has to care
+# whether the box is on a channel or in a menu.
 KEYMAP = {
     "select":        e.KEY_ENTER,
     "up":            e.KEY_UP,
