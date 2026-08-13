@@ -2,38 +2,90 @@
 # nothing-htpc curated cable lineup.
 # Format: tvg-chno = the channel number on your "cable box".
 # Numbers are stable — add channels at any free number, gaps are fine.
-# 990-999 are reserved for teletext (defined in cabletv.lua):
-#   991 NEWS (MK / SKG)  992 WEATHER   993 MOVIES   994 TV SHOWS   999 GUIDE
-#   995-998 are free.  993/994 read cabletv/library.tsv, not this file.
+# An entry with no number is skipped, never auto-assigned: the whole point of
+# tvg-chno is that 3 is always Sitel.
 #
-# Sources: iptv-org (github.com/iptv-org/iptv), publicly available streams.
-# [Geo] = geo-blocked to MK — works from home, not from elsewhere.
-# Paste me more m3u playlists in chat and I'll extract + merge channels here.
+# 990-999 used to be reserved for teletext. Teletext is gone (July 2026) and
+# those numbers are simply free — NEWS, WEATHER, MOVIES and SHOWS are screens
+# in the launcher now, not channels.
+#
+# Sources: iptv-org (github.com/iptv-org/iptv), Free-TV/IPTV, and the
+# broadcasters' own CDNs. Paste me more m3u playlists in chat and I'll extract
+# and merge them here.
+#
+# --- how this file is maintained -------------------------------------------
+#
+# Every URL below was probed from the Fedora laptop on 13 Aug 2026 and answered
+# with a playlist, a variant AND a segment. That last part is the one that
+# matters: a master playlist over a dead origin returns 200 and shows black,
+# which is indistinguishable from a broken box at the sofa.
+#
+# A channel with no working source has its URL commented out rather than left
+# to rot. The number and the name stay as a placeholder, so the dial keeps its
+# shape and the entry is one uncommented line away from being back.
+# server/channels.py skips an #EXTINF whose URL is commented, so a reserved
+# number costs nothing and never shows up as a black channel.
+#
+# The lineup is deliberately geo-free: everything here answers from an ordinary
+# European connection with no VPN, no user-agent games and no referrer header.
+# Streams that only worked with a browser user-agent were rejected rather than
+# worked around — mpv would need the header carried through this file, and the
+# channel would break again the next time the operator tightened it.
+
+# ============================================================================
+# 1-29   MACEDONIA
+# ============================================================================
+#
+# The bad news first: the vipottbpkstream.vip.hr CDN, which carried eight of
+# these (MRT 2, Alsat, TV21, Shenja, MTM, Sobraniski, ERA, Sutel), now refuses
+# connections outright — not a geo-block, the host is simply gone. teve.mk's
+# s1/s2 subdomains went with it; the apex still works. This is constraint 18 in
+# the ordinary course of business, which is why it costs comments and not a
+# rebuild.
 
 #EXTINF:-1 tvg-chno="1",MRT 1
-https://s1.teve.mk/tvstanici/6/playlist.m3u8
+# No working public source as of 13 Aug 2026. The public broadcaster's own
+# stream is behind MRT Play, the interspace.com URLs in circulation carry a
+# 30-minute signed token, and every mirror found was geo-fenced or dead.
+# Worth re-checking from the box's own connection at home.
+# https://teve.mk/tvstanici/6/playlist.m3u8
+
 #EXTINF:-1 tvg-chno="2",MRT 2
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(MRT_2)/index.m3u8
+# Was vipottbpkstream.vip.hr — that host now refuses connections.
+# https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(MRT_2)/index.m3u8
+
 #EXTINF:-1 tvg-chno="3",Sitel
 https://teve.mk/tvstanici/s1/playlist.m3u8
 #EXTINF:-1 tvg-chno="4",Kanal 5
-https://s2.teve.mk/tvstanici/2/playlist.m3u8
+https://teve.mk/tvstanici/2/playlist.m3u8
+
 #EXTINF:-1 tvg-chno="5",Alsat
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Alsat_M)/index.m3u8
+# vipottbpkstream.vip.hr is gone.
+# https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Alsat_M)/index.m3u8
+
 #EXTINF:-1 tvg-chno="6",TV21
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(TV21)/index.m3u8
+https://t2.tvmak.com/tv/TV21MK.m3u8?QScgsh2FfM
+
 #EXTINF:-1 tvg-chno="7",TV 24
-https://s1.teve.mk/tvstanici/5/playlist.m3u8
+# s1.teve.mk's certificate never covered the name and the host is now gone;
+# hls.telekabel.com.mk answers but refuses this network.
+# https://s1.teve.mk/tvstanici/5/playlist.m3u8
+
 #EXTINF:-1 tvg-chno="8",Nasha TV
 https://stream.nasatv.com.mk/hls/nasatv_live.m3u8
+
 #EXTINF:-1 tvg-chno="9",M-Net HD
-https://live.mnet.mk/hls/mnet.m3u8
+# ares.mnet.mk and live.mnet.mk both answer with an HTML error page now.
+# https://live.mnet.mk/hls/mnet.m3u8
 #EXTINF:-1 tvg-chno="10",M-Net Info
-https://live.mnet.mk/hls/mnet-info.m3u8
+# https://live.mnet.mk/hls/mnet-info.m3u8
 #EXTINF:-1 tvg-chno="11",M-Net Sport
-https://live.mnet.mk/hls/mnet-sport.m3u8
+# https://live.mnet.mk/hls/mnet-sport.m3u8
 #EXTINF:-1 tvg-chno="12",M-Net Kids
-http://ares.mnet.mk/hls/mnet-kids.m3u8
+# http://ares.mnet.mk/hls/mnet-kids.m3u8
+
+# The nasatv.com.mk music and lifestyle bouquet — the most reliable Macedonian
+# streams on this list by some distance.
 #EXTINF:-1 tvg-chno="13",Cool TV
 https://stream.nasatv.com.mk/cooltv/hls/cooltv_live.m3u8
 #EXTINF:-1 tvg-chno="14",Folk TV
@@ -48,15 +100,164 @@ https://stream.nasatv.com.mk/lovetv/hls/lovetv_live.m3u8
 https://eu.live.skyfolk.mk/live.m3u8
 #EXTINF:-1 tvg-chno="19",TopEstrada TV
 http://live.topestrada.com/live/topestrada/playlist.m3u8
+
 #EXTINF:-1 tvg-chno="20",Star Plus Music
-https://live.muzickatv.mk/live/StarMusic2.m3u8
+# live.muzickatv.mk no longer resolves.
+# https://live.muzickatv.mk/live/StarMusic2.m3u8
 #EXTINF:-1 tvg-chno="21",TV Shenja
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(TV_Shenja)/index.m3u8
+# https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(TV_Shenja)/index.m3u8
 #EXTINF:-1 tvg-chno="22",MTM 1
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(MTM)/index.m3u8
+# https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(MTM)/index.m3u8
 #EXTINF:-1 tvg-chno="23",Sobraniski kanal
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Sobraniski_Kanal)/index.m3u8
+# https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Sobraniski_Kanal)/index.m3u8
 #EXTINF:-1 tvg-chno="24",TV ERA
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(ERA)/index.m3u8
+# https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(ERA)/index.m3u8
 #EXTINF:-1 tvg-chno="25",Sutel TV
-https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Shutel)/index.m3u8
+# https://vipottbpkstream.vip.hr/Content/onevip-hls/Live/Channel(Shutel)/index.m3u8
+
+#EXTINF:-1 tvg-chno="26",Telma
+# Requested and not found. Telma is not in iptv-org at all, the telekabel and
+# tvmak mirrors that carry other Macedonian channels do not carry it under any
+# name tried, and telma.com.mk's own player exposes no playlist URL to a plain
+# GET. Number reserved — put a URL on the line below and it is back.
+
+# ============================================================================
+# 30-39  GREECE
+# ============================================================================
+#
+# ERT1, ERT2 and ERT3 are genuinely geo-fenced: their CDN 307s to msvdn.net,
+# which answers 401 "Content blocked by security policy" from outside Greece.
+# ERT News on the same CDN is open, which is how you can tell it is policy
+# rather than breakage. ANT1 works unauthenticated despite iptv-org marking it
+# geo-blocked.
+
+#EXTINF:-1 tvg-chno="30",ERT1
+# Geo-fenced to Greece — 401 from here.
+# https://ert-ucdn.broadpeak-aas.com/bpk-tv/ERT1/default/index.m3u8
+#EXTINF:-1 tvg-chno="31",ERT2
+# https://ert-ucdn.broadpeak-aas.com/bpk-tv/ERT2/default/index.m3u8
+#EXTINF:-1 tvg-chno="32",ERT3
+# https://ert-ucdn.broadpeak-aas.com/bpk-tv/ERT3/default/index.m3u8
+
+#EXTINF:-1 tvg-chno="33",ERT News
+https://ert-ucdn.broadpeak-aas.com/bpk-tv/ERTNews/default/index.m3u8
+#EXTINF:-1 tvg-chno="34",ANT1
+https://mcdn.antennaplus.gr/live/media0/Ant1/HLS/Ant1.m3u8
+#EXTINF:-1 tvg-chno="35",Alpha TV
+https://alphatvlive2.siliconweb.com/alphatvlive/live_abr/playlist.m3u8
+#EXTINF:-1 tvg-chno="36",Skai TV
+http://skai-live-back.siliconweb.com/media/cambria4/index.m3u8
+#EXTINF:-1 tvg-chno="37",Star Channel
+http://livestar.siliconweb.com/starvod/star4/star4.m3u8
+
+#EXTINF:-1 tvg-chno="38",Mega Channel
+# 403 from every mirror found.
+# http://185.102.171.218/MegaHD/index.m3u8
+
+# ============================================================================
+# 40-49  WORLD NEWS
+# ============================================================================
+#
+# All eight are the broadcaster's own feed or a first-party FAST channel, in
+# English, and none of them needed a header. The most durable block in the file.
+
+#EXTINF:-1 tvg-chno="40",BBC News
+https://vs-hls-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/mobile_wifi_main_sd_abr_v2.m3u8
+#EXTINF:-1 tvg-chno="41",CNN
+https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_0_3564000.m3u8
+#EXTINF:-1 tvg-chno="42",Al Jazeera English
+https://live-hls-apps-aje-fa.getaj.net/AJE/index.m3u8
+#EXTINF:-1 tvg-chno="43",France 24
+https://live.france24.com/hls/live/2037218/F24_EN_HI_HLS/master_2300.m3u8
+#EXTINF:-1 tvg-chno="44",DW English
+https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8
+#EXTINF:-1 tvg-chno="45",Euronews
+https://dash4.antik.sk/live/test_euronews/playlist.m3u8
+#EXTINF:-1 tvg-chno="46",Sky News
+https://xemzi.short.gy/1000018
+#EXTINF:-1 tvg-chno="47",Bloomberg TV
+https://bloomberg.com/media-manifest/streams/eu.m3u8
+
+# ============================================================================
+# 50-59  MUSIC
+# ============================================================================
+#
+# MTV proper (50-53) comes off two US re-streamers rather than Paramount, so it
+# is the least durable block here — expect to re-probe it. Vevo and Trace are
+# first-party FAST feeds and should outlive them. The regional Vevo feeds are
+# whichever answered; music video is language-neutral, so it does not matter.
+
+#EXTINF:-1 tvg-chno="50",MTV
+http://40.160.24.53/MTV/index.m3u8
+#EXTINF:-1 tvg-chno="51",MTV 2
+http://198.58.104.90:8989/mtv2/index.m3u8
+#EXTINF:-1 tvg-chno="52",MTV Classic
+http://40.160.24.53/MTV_CLASSIC/index.m3u8
+#EXTINF:-1 tvg-chno="53",MTV Biggest Pop
+https://jmp2.uk/plu-6047fbdbbb776a0007e7f2ff.m3u8
+#EXTINF:-1 tvg-chno="56",Vevo Pop
+https://amg00056-amg00056c9-rakuten-fr-3243.playouts.now.amagi.tv/playlist/amg00056-vevotvfast-vevopopfr-rakutenfr/playlist.m3u8
+#EXTINF:-1 tvg-chno="57",Vevo 80s
+https://amg00056-vevotv-vevo80saunz-samsungau-rp5e3.amagi.tv/playlist/amg00056-vevotv-vevo80saunz-samsungau/playlist.m3u8
+#EXTINF:-1 tvg-chno="58",Trace Urban
+https://channels.trace.plus/Traceprod/URBAN_AFRIC_FR_hd/index.m3u8
+
+# ============================================================================
+# 60-89  CARTOONS AND KIDS
+# ============================================================================
+#
+# Cartoon Network, Boomerang and Adult Swim proper have no free feed anywhere —
+# Warner keeps them behind a TV-provider login and iptv-org carries neither.
+# What is here instead is the Nickelodeon bouquet, the Disney trio, and a set
+# of single-series and FAST channels (Pluto, Amagi, Wurl) that are genuinely
+# free and run cartoons around the clock.
+
+#EXTINF:-1 tvg-chno="60",Nickelodeon
+http://23.237.104.106:8080/USA_NICKELODEON/index.m3u8
+#EXTINF:-1 tvg-chno="61",Nicktoons
+http://40.160.24.55/NICKTOONS/index.m3u8
+#EXTINF:-1 tvg-chno="62",Nick Jr
+http://40.160.24.55/NICK_JR/index.m3u8
+#EXTINF:-1 tvg-chno="63",TeenNick
+http://40.160.24.55/TEEN_NICK/index.m3u8
+#EXTINF:-1 tvg-chno="64",Nickelodeon Toons
+https://jmp2.uk/plu-645951c0e94c38000802d2cb.m3u8
+#EXTINF:-1 tvg-chno="65",Nickelodeon Pluto
+https://jmp2.uk/plu-5ca673e0d0bd6c2689c94ce3.m3u8
+#EXTINF:-1 tvg-chno="66",Nick Jr Club
+https://jmp2.uk/plu-6824ce95f09106f4b18f4114.m3u8
+#EXTINF:-1 tvg-chno="67",South Park
+https://jmp2.uk/plu-609ae66b359b270007869ff1.m3u8
+#EXTINF:-1 tvg-chno="68",Garfield and Friends
+https://jmp2.uk/plu-60faf9ddfcc1f200070a5932.m3u8
+#EXTINF:-1 tvg-chno="69",Hey Arnold
+https://jmp2.uk/plu-66c79221b1a34600087e264d.m3u8
+#EXTINF:-1 tvg-chno="70",Ninja Turtles
+https://jmp2.uk/plu-63dd5d7a4e83e700088fbca8.m3u8
+#EXTINF:-1 tvg-chno="71",Kartoon Channel
+https://d2z0ysa6dgxhlc.cloudfront.net/kchan.m3u8
+#EXTINF:-1 tvg-chno="72",Crunchyroll
+https://jmp2.uk/plu-65652f7fc0fc88000883537a.m3u8
+#EXTINF:-1 tvg-chno="73",Disney Channel
+http://190.14.10.19:16000/play/a06z/index.m3u8
+#EXTINF:-1 tvg-chno="74",Disney XD
+http://23.237.104.106:8080/USA_DISNEY_XD/index.m3u8
+#EXTINF:-1 tvg-chno="75",Disney Junior
+http://23.237.104.106:8080/USA_DISNEY_JUNIOR/index.m3u8
+#EXTINF:-1 tvg-chno="76",DreamWorks
+https://cdn12.178.indevs.in/163189/dreamworks
+#EXTINF:-1 tvg-chno="77",Lego Channel
+https://dh18i7whff86v.cloudfront.net/index.m3u8
+#EXTINF:-1 tvg-chno="78",Baby Shark TV
+https://newidco-babysharktv-1-eu.rakuten.wurl.tv/playlist.m3u8
+#EXTINF:-1 tvg-chno="79",Dora TV
+https://jmp2.uk/plu-62e951258a26d40007b3034c.m3u8
+#EXTINF:-1 tvg-chno="80",Happy Kids
+https://dil9xdvretp0f.cloudfront.net/index.m3u8
+#EXTINF:-1 tvg-chno="81",90s Kids
+https://jmp2.uk/plu-6452c814939a590008567a3b.m3u8
+
+#EXTINF:-1 tvg-chno="85",Cartoon Network
+# No free feed exists. Warner requires a TV-provider login; the Arabic
+# (shahid.net) and Italian Cartoonito mirrors both 403/404 from here.
+# Number reserved.

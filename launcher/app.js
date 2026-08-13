@@ -120,7 +120,7 @@ export function dotSVG(text, dotPx, opts = {}) {
   const color = opts.color ?? "var(--ink)";
   /* `assemble` staggers each dot's fade-in so a value doesn't just appear —
      it builds. This is the signature motion of the whole UI, and it is a
-     theme value, so the pi3 profile can turn it off by setting it to 0. */
+     theme value, so the `lite` profile can turn it off by setting it to 0. */
   const stagger = opts.assemble ? (THEME.motion["dot-stagger"] || 0) : 0;
   const dur = THEME.motion["dot-assemble"] || 0;
   let x = 0, dots = "", n = 0;
@@ -158,6 +158,15 @@ export function fitDots(text, avail, { max = 40, min = 2, charGap = 1.4 } = {}) 
   const n = Math.max(1, String(text).length);
   const per = DOT_STEP * (5 + charGap);
   return Math.max(min, Math.min(max, avail / (n * per)));
+}
+
+/* The inverse: how wide dotSVG will draw `n` characters at this dot size.
+   The channel list needs its number column to be one width on every row —
+   103 and 7 have to start their names in the same place — and the dot engine
+   is the only thing that knows what that comes to in pixels. */
+export function dotWidth(n, dotPx, charGap = 1.4) {
+  const step = dotPx * DOT_STEP;
+  return Math.max(0, n * step * (5 + charGap) - step * charGap);
 }
 
 /* =========================================================
@@ -514,6 +523,8 @@ async function loadChannels() {
 }
 
 function tvEnter() {
+  // The list is summoned, never arrived-at: entering TV shows the picture.
+  chanListShow(false);
   if (!tv.channels.length) { loadChannels().then(() => tvShow()); return; }
   tvShow();
 }
@@ -528,6 +539,8 @@ function tvShow() {
   bar.classList.add("show");
   clearTimeout(tv.barTimer);
   tv.barTimer = setTimeout(() => bar.classList.remove("show"), THEME.motion["bar-hold"]);
+  // Typing a number while the list is open moves what is live under it.
+  if (chanList.open) renderChanList();
 
   /* Debounced load — the picture cuts to the indicator immediately, but the
      stream is not opened until the number has sat still. */
@@ -584,7 +597,76 @@ function tvDigit(d) {
 async function tvStop() {
   clearTimeout(tv.loadTimer);
   setChanState(null);
+  chanListShow(false);
   if (!FIXTURES) { try { await fetch(`${BACKEND}/player/stop`, { method: "POST" }); } catch (_) {} }
+}
+
+/* ---------------------------------------------------------
+   THE CHANNEL LIST
+   Zapping and the keypad only work if you already know the dial. This is the
+   dial made visible: it slides in over the picture, which keeps playing
+   behind it — the whole reason the launcher is one transparent page rather
+   than a menu that replaces the video.
+
+   Red marks the channel that is on. The glow marks the one the cursor is
+   over. They are usually not the same row, which is exactly why the design
+   language spends its one accent on state and never on focus.
+   --------------------------------------------------------- */
+const chanList = { open: false, sel: 0, top: 0 };
+
+function chanListShow(on) {
+  chanList.open = on && tv.channels.length > 0;
+  document.getElementById("chanlist").classList.toggle("on", chanList.open);
+  if (!chanList.open) return;
+  chanList.sel = tv.idx;                 // always opens on what is playing
+  renderChanList();
+}
+
+function renderChanList() {
+  const rows = THEME.layout["channel-list-rows"] || 9;
+  const n = tv.channels.length;
+  chanList.sel = Math.max(0, Math.min(chanList.sel, n - 1));
+  if (chanList.sel < chanList.top) chanList.top = chanList.sel;
+  if (chanList.sel > chanList.top + rows - 1) chanList.top = chanList.sel - rows + 1;
+  chanList.top = Math.max(0, Math.min(chanList.top, Math.max(0, n - rows)));
+
+  const dot = THEME.layout["channel-list-dot"] || 2.8;
+  // One number column, wide enough for the longest number on the dial, so
+  // every name starts at the same x whether its channel is 7 or 107.
+  const noW = Math.ceil(dotWidth(
+    Math.max(1, ...tv.channels.map(c => String(c.no).length)), dot));
+
+  document.getElementById("chanrows").innerHTML =
+    tv.channels.slice(chanList.top, chanList.top + rows).map((c, i) => {
+      const idx = chanList.top + i;
+      // Channel names come from a hand-edited m3u and are not all Latin, so
+      // only the number goes to the dot face.
+      return `<div class="chanrow${idx === chanList.sel ? " sel" : ""}` +
+             `${idx === tv.idx ? " live" : ""}" data-i="${idx}">
+        <span class="cno" style="width:${noW}px">${dotSVG(String(c.no), dot)}</span>
+        <span class="cname">${escapeHTML(c.name)}</span>
+        <span class="clive"></span>
+      </div>`;
+    }).join("");
+
+  document.getElementById("chanrows").querySelectorAll(".chanrow").forEach(r =>
+    r.addEventListener("click", () => { chanList.sel = +r.dataset.i; chanListPick(); }));
+
+  document.getElementById("chancount").textContent = `${chanList.sel + 1}/${n}`;
+}
+
+function chanListMove(dy) {
+  const n = tv.channels.length;
+  if (!n) return;
+  // Wraps, like zapping does: the dial is a loop and the list is the dial.
+  chanList.sel = (chanList.sel + dy + n) % n;
+  renderChanList();
+}
+
+function chanListPick() {
+  tv.idx = chanList.sel;
+  chanListShow(false);
+  tvShow();
 }
 
 /* =========================================================
@@ -641,14 +723,66 @@ const FIXTURE_CREDITS = {
   writer: ["Jon Spaihts", "Frank Herbert"],
   cast: ["Timothée Chalamet", "Zendaya", "Rebecca Ferguson", "Javier Bardem", "Josh Brolin"],
 };
+/* The first one is deliberately far longer than the panel — a real TMDB
+   review runs to hundreds of words, and a fixture set where everything fits
+   in four lines would let the auto-scroll rot without any test noticing. */
 const FIXTURE_REVIEWS = [
   { author: "cinemabuff", rating: 9,
-    text: "A rare sequel that widens rather than repeats. The sound design does as much narrative work as the script, and the desert is photographed as a character rather than a backdrop." },
+    text: "A rare sequel that widens rather than repeats. The sound design does as much narrative work as the script, and the desert is photographed as a character rather than a backdrop. What struck me hardest on a second viewing is how little of it is exposition: the politics are legible entirely through blocking and costume, and a film this large trusting an audience that much is close to unheard of now. The middle hour, which everyone warned me sagged, is where it is doing its most careful work — a slow accumulation of small betrayals that only reads as inevitable in hindsight. Whether the ending lands depends on whether you have understood that it was never going to be a triumph, and the film has been telling you that from its first shot." },
   { author: "marisol_v", rating: 7,
     text: "Visually overwhelming and emotionally cool. I admired almost every frame and felt held at arm's length by all of them, which may well be the point." },
   { author: "j_okafor", rating: 10,
     text: "The best argument for seeing films in a cinema that I have had in a decade. Everything is scaled to overwhelm, and it earns the scale." },
 ];
+
+/* Shows, with episodes, so the season tabs and the episode window are both
+   exercised on a laptop. Season counts are per title — a one-season show and
+   a three-season one look different enough that a tab strip bug shows up. */
+const FIXTURE_EPISODE_NAMES = [
+  "Good News About Hell", "Half Loop", "In Perpetuity", "The You You Are",
+  "The Grim Barbarity of Optics", "Hide and Seek", "Defiant Jazz",
+  "What's for Dinner?", "The We We Are", "Hello, Ms. Cobel",
+  "Goodbye, Mrs. Selvig", "Woe's Hollow",
+];
+
+function fixtureEpisodes(id, seasons) {
+  const out = [];
+  seasons.forEach((n, i) => {
+    const season = i + 1;
+    for (let e = 1; e <= n; e++) {
+      out.push({
+        id: `${id}:${season}:${e}`,
+        season, episode: e,
+        title: FIXTURE_EPISODE_NAMES[(e - 1) % FIXTURE_EPISODE_NAMES.length],
+        released: `${2020 + season}-0${1 + (e % 9)}-${String(1 + ((e * 7) % 27)).padStart(2, "0")}`,
+      });
+    }
+  });
+  return out;
+}
+
+const FIXTURE_SHOWS = `Severance|2022|8.7|9,10|Employees at a biotech firm undergo a procedure that divides their work and personal memories.
+Shogun|2024|8.6|10|A English sailor is shipwrecked in feudal Japan as a lord fights for his life.
+The Bear|2022|8.6|8,10,10|A fine-dining chef returns to Chicago to run his family's sandwich shop.
+Slow Horses|2022|8.2|6,6,6|Rejected MI5 agents work under a brilliant and disgusting boss.
+Andor|2022|8.4|12|The birth of a rebellion, five years before the Death Star.
+Dark|2017|8.7|10,8,8|Four families search for a missing child and find a town's secret.
+The Leftovers|2014|8.3|10,8,8|Three years after two percent of the world vanished, the ones left behind.
+Chernobyl|2019|9.3|5|The 1986 nuclear accident and the people who contained it.
+Better Call Saul|2015|9.0|10,10,10|A small-time lawyer becomes the criminal attorney Saul Goodman.
+Fleabag|2016|8.7|6,6|A woman in London navigates grief, family and a hopeless love life.
+Succession|2018|8.9|10,10,9|A media dynasty's children circle their father's failing empire.
+Ted Lasso|2020|8.8|10,12|An American football coach is hired to manage an English soccer club.`
+  .split("\n").map((line, i) => {
+    const [title, year, rating, seasons, plot] = line.split("|");
+    const id = `ttfixture${i}`;
+    return { id, title, year, rating, plot, poster: "", runtime: 0,
+             episodes: fixtureEpisodes(id, seasons.split(",").map(Number)) };
+  });
+
+function fixtureItems(kind) {
+  return (kind === "movie" ? FIXTURE_LIBRARY : FIXTURE_SHOWS).slice();
+}
 
 const gridState = {
   kind: "movie",
@@ -697,7 +831,7 @@ async function gridEnter() {
     dotSVG(copy(gridState.kind === "movie" ? "tiles.movies" : "tiles.shows"), 6, { assemble: true });
 
   if (!gridState.loaded[gridState.kind]) {
-    gridState.items = FIXTURES ? FIXTURE_LIBRARY.slice() : [];
+    gridState.items = FIXTURES ? fixtureItems(gridState.kind) : [];
     gridState.page = 0; gridState.sel = 0; gridState.topRow = 0;
     gridState.exhausted = FIXTURES;
     await ensureLoaded(perPage());
@@ -816,24 +950,71 @@ function starDots(outOf10, dotPx = 4.4) {
          (off ? dotSVG(off, dotPx, { charGap: 0.9, color: "var(--faint)" }) : "");
 }
 
-const reviews = { list: [], i: 0, timer: null };
+const reviews = { list: [], i: 0, timers: [] };
 
 function stopReviews() {
-  clearTimeout(reviews.timer);
-  reviews.timer = null;
+  reviews.timers.forEach(clearTimeout);
+  reviews.timers = [];
 }
+function later(fn, ms) { reviews.timers.push(setTimeout(fn, ms)); }
 
 /* One review at a time, held then cross-faded. Same idea as the news
    marquee — the panel is not tall enough for three reviews, but it is tall
-   enough for three reviews one after another. */
-function cycleReviews() {
+   enough for three reviews one after another.
+
+   And if one review is taller than the panel, it scrolls inside it. This used
+   to clip at the fourth line and fade the rest out, which loses the end of
+   every review long enough to be worth reading. Nothing advances to the next
+   review until this one has been all the way down and (if it is the only one)
+   back: a fixed hold over a scrolling paragraph is the same bug with extra
+   steps. */
+function runReview() {
   stopReviews();
-  if (reviews.list.length < 2) return;
-  reviews.timer = setTimeout(() => {
-    reviews.i = (reviews.i + 1) % reviews.list.length;
-    showReview();
-    cycleReviews();
-  }, THEME.motion["review-hold"] || 7000);
+  const el = document.getElementById("rstack").children[reviews.i];
+  if (!el) return;
+  const body = el.querySelector(".rbody");
+  const text = el.querySelector(".rtext");
+  if (!body || !text) return;
+
+  const hold = THEME.motion["review-hold"] || 7000;
+  const pause = THEME.motion["review-scroll-hold"] || 2400;
+  const speed = THEME.motion["review-scroll-px-per-s"] || 13;
+
+  text.style.transition = "none";
+  text.style.transform = "translateY(0)";
+  body.classList.remove("scrolled", "end");
+
+  /* Reading scrollHeight flushes the reset above, so the measurement is of
+     this review at the top and not of wherever the last one had crawled to. */
+  const over = Math.max(0, text.scrollHeight - body.clientHeight);
+  body.classList.toggle("more", over > 1);
+  if (over <= 1) { later(nextReview, hold); return; }
+
+  const travel = Math.max(THEME.motion.view || 240, (over / speed) * 1000);
+  const glide = (to, ms) => {
+    text.style.transition = `transform ${ms}ms linear`;
+    text.style.transform = `translateY(${to}px)`;
+  };
+
+  later(() => {
+    body.classList.add("scrolled");
+    glide(-over, travel);
+    later(() => {
+      body.classList.add("end");              // at the bottom: nothing to fade
+      later(() => {
+        if (reviews.list.length > 1) { nextReview(); return; }
+        body.classList.remove("end");
+        glide(0, travel);
+        later(() => { body.classList.remove("scrolled"); runReview(); }, travel);
+      }, pause);
+    }, travel);
+  }, pause);
+}
+
+function nextReview() {
+  if (!reviews.list.length) return;
+  reviews.i = (reviews.i + 1) % reviews.list.length;
+  showReview();
 }
 
 function showReview() {
@@ -841,6 +1022,7 @@ function showReview() {
   [...stack.children].forEach((el, i) => el.classList.toggle("on", i === reviews.i));
   document.getElementById("rdots").innerHTML =
     reviews.list.map((_, i) => `<i class="${i === reviews.i ? "on" : ""}"></i>`).join("");
+  runReview();
 }
 
 function renderReviews(list) {
@@ -848,27 +1030,130 @@ function renderReviews(list) {
   const stack = document.getElementById("rstack");
   reviews.list = list || [];
   reviews.i = 0;
+  stopReviews();
 
   if (!reviews.list.length) {
-    // No key, or a film nobody has written about. The section disappears
-    // rather than showing an empty frame with a heading over it.
+    // No key, a film nobody has written about, or a show — which spends this
+    // half of the panel on seasons instead. The section disappears rather than
+    // showing an empty frame with a heading over it.
     box.style.display = "none";
     stack.innerHTML = "";
-    stopReviews();
     return;
   }
   box.style.display = "flex";
   document.getElementById("rlabel").textContent = copy("detail.reviews");
+  // .rtext is what moves; .rbody is the window it moves behind.
   stack.innerHTML = reviews.list.map(r => `
     <div class="review">
       <div class="rtop">
         <span class="rstars">${starDots(r.rating)}</span>
         <span class="rauthor">${escapeHTML(r.author || "")}</span>
       </div>
-      <div class="rbody">${escapeHTML(r.text || "")}</div>
+      <div class="rbody"><div class="rtext">${escapeHTML(r.text || "")}</div></div>
     </div>`).join("");
   showReview();
-  cycleReviews();
+}
+
+/* =========================================================
+   SHOWS — season tabs and an episode chooser, in the space a film spends on
+   reviews. Cinemeta hands every episode over with the id Torrentio wants
+   ("tt11198330:1:3"), so choosing one here is the whole of the work: /play
+   takes that id unchanged.
+
+   ◂ ▸ moves between seasons, ▴ ▾ between episodes. No focus to juggle between
+   the two — on a d-pad, an axis that means one thing everywhere is worth more
+   than a tab strip you can enter and leave.
+   ========================================================= */
+const series = { episodes: [], seasons: [], si: 0, ei: 0, top: 0 };
+
+function seasonEpisodes() {
+  const s = series.seasons[series.si];
+  return series.episodes.filter(e => e.season === s);
+}
+
+function hideSeasons() {
+  document.getElementById("dseasons").style.display = "none";
+}
+
+function loadEpisodes(list) {
+  series.episodes = list || [];
+  // Specials (season 0) last, wherever the upstream put them.
+  series.seasons = [...new Set(series.episodes.map(e => e.season))]
+    .sort((a, b) => (a === 0) - (b === 0) || a - b);
+  series.si = 0; series.ei = 0; series.top = 0;
+  renderSeasons();
+}
+
+function renderSeasons() {
+  const box = document.getElementById("dseasons");
+  const tabs = document.getElementById("stabs");
+  const list = document.getElementById("eplist");
+  box.style.display = "flex";
+  document.getElementById("slabel").textContent = copy("detail.season");
+
+  if (!series.episodes.length) {
+    tabs.innerHTML = "";
+    list.innerHTML = `<div class="empty">${copy("state.empty")}</div>`;
+    document.getElementById("scount").textContent = "";
+    return;
+  }
+
+  tabs.innerHTML = series.seasons.map((s, i) =>
+    `<span class="stab${i === series.si ? " sel" : ""}" data-s="${i}">` +
+    `${s === 0 ? copy("detail.specials") : String(s)}</span>`).join("");
+  tabs.querySelectorAll(".stab").forEach(t => t.addEventListener("click", () => {
+    series.si = +t.dataset.s; series.ei = 0; series.top = 0; renderSeasons();
+  }));
+
+  const eps = seasonEpisodes();
+  const rows = THEME.layout["detail-episode-rows"] || 7;
+  // Windowed, not scrolled: a show with 700 episodes must cost the same to
+  // draw as one with 8, and only `rows` of them are ever on screen anyway.
+  series.ei = Math.max(0, Math.min(series.ei, eps.length - 1));
+  if (series.ei < series.top) series.top = series.ei;
+  if (series.ei > series.top + rows - 1) series.top = series.ei - rows + 1;
+  series.top = Math.max(0, Math.min(series.top, Math.max(0, eps.length - rows)));
+
+  list.innerHTML = eps.slice(series.top, series.top + rows).map((e, i) => {
+    const idx = series.top + i;
+    // Episode titles are often missing on a just-aired season; the number is
+    // what the box always knows, so it is what the fallback says.
+    const name = e.title || `${copy("detail.episode")} ${e.episode}`;
+    return `<div class="eprow${idx === series.ei ? " sel" : ""}" data-i="${idx}">
+      <span class="epno">${String(e.episode).padStart(2, "0")}</span>
+      <span class="epname">${escapeHTML(name)}</span>
+      ${e.released ? `<span class="epdate">${escapeHTML(e.released)}</span>` : ""}
+    </div>`;
+  }).join("");
+
+  list.querySelectorAll(".eprow").forEach(r => r.addEventListener("click", () => {
+    series.ei = +r.dataset.i; renderSeasons(); playSelected();
+  }));
+
+  document.getElementById("scount").textContent =
+    eps.length ? `${copy("detail.episode")} ${series.ei + 1}/${eps.length}` : copy("state.empty");
+
+  // Keep the open season's tab in view when a show has more seasons than fit.
+  const selTab = tabs.querySelector(".stab.sel");
+  if (selTab) {
+    tabs.scrollLeft = Math.max(
+      0, selTab.offsetLeft - tabs.clientWidth / 2 + selTab.clientWidth / 2);
+  }
+}
+
+function seriesMove(dx, dy) {
+  if (!series.episodes.length) return;
+  if (dx) {
+    const n = series.si + dx;
+    if (n < 0 || n >= series.seasons.length) return;
+    series.si = n; series.ei = 0; series.top = 0;
+  }
+  if (dy) {
+    const n = series.ei + dy;
+    if (n < 0 || n >= seasonEpisodes().length) return;
+    series.ei = n;
+  }
+  renderSeasons();
 }
 
 function renderCredits(c) {
@@ -905,16 +1190,24 @@ async function openDetail() {
   document.getElementById("dmeta").innerHTML = meta.map(m => `<span>${m}</span>`).join("");
   document.getElementById("dplot").textContent = it.plot || "";
 
-  // Draw what the grid already knows, then fill in credits and reviews when
-  // they arrive. The panel must never wait on the network to appear — a
-  // detail screen that opens half a second after Ⓐ feels broken.
+  /* The bottom half of the panel belongs to whichever of the two the kind
+     calls for: a film's reviews, or a show's seasons and episodes. Only ever
+     one of them, so renderReviews([]) is how the film half is put away. */
+  const isShow = gridState.kind !== "movie";
+  drawDetailHints(isShow);
+
+  // Draw what the grid already knows, then fill in credits, reviews and
+  // episodes when they arrive. The panel must never wait on the network to
+  // appear — a detail screen that opens half a second after Ⓐ feels broken.
   renderCredits(it.credits || {});
-  renderReviews(it.reviews || []);
+  if (isShow) { renderReviews([]); loadEpisodes(it.episodes || []); }
+  else { hideSeasons(); renderReviews(it.reviews || []); }
   document.getElementById("detail").classList.add("on");
 
   if (FIXTURES) {
     renderCredits(FIXTURE_CREDITS);
-    renderReviews(FIXTURE_REVIEWS.slice(0, THEME.layout["detail-reviews"] || 3));
+    if (isShow) loadEpisodes(it.episodes || []);
+    else renderReviews(FIXTURE_REVIEWS.slice(0, THEME.layout["detail-reviews"] || 3));
     return;
   }
   if (it.credits) return;                       // already enriched
@@ -926,12 +1219,16 @@ async function openDetail() {
       runtime: full.runtime || it.runtime,
       credits: full.credits || {},
       reviews: (full.reviews || []).slice(0, THEME.layout["detail-reviews"] || 3),
+      // Not sliced: the chooser windows them itself, and a show's episode list
+      // is the point of the screen rather than a garnish on it.
+      episodes: full.episodes || [],
     });
     // The cursor may have moved on while this was in flight.
     if (gridState.detail && gridState.items[gridState.sel] === it) {
       document.getElementById("dplot").textContent = it.plot || "";
       renderCredits(it.credits);
-      renderReviews(it.reviews);
+      if (isShow) loadEpisodes(it.episodes);
+      else renderReviews(it.reviews);
     }
   } catch (_) { /* keep what the grid gave us */ }
 }
@@ -939,22 +1236,162 @@ async function openDetail() {
 function closeDetail() {
   gridState.detail = false;
   stopReviews();
+  // The picker belongs to the panel underneath it, so it never outlives it.
+  sourcesShow(false);
   document.getElementById("detail").classList.remove("on");
 }
 
-async function playSelected() {
+/* What Ⓐ is about to play: a film by its own id, an episode by the id the
+   chooser is sitting on — "tt11198330:1:3", which is what the stream addons
+   index series by, so nothing has to be resolved twice. */
+function playTarget() {
   const it = gridState.items[gridState.sel];
-  if (!it) return;
-  if (FIXTURES) { showToast(`${copy("state.resolving")} · ${it.title.toUpperCase()}`); return; }
+  if (!it) return null;
+  if (gridState.kind === "movie") return { id: it.id, what: it.title };
+  const e = seasonEpisodes()[series.ei];
+  if (!e) return null;
+  return { id: e.id, what: `${it.title} · S${e.season} E${e.episode}` };
+}
+
+async function playSelected(index = 0) {
+  const t = playTarget();
+  if (!t) { showToast(copy("state.empty")); return; }
+
+  if (FIXTURES) { showToast(`${copy("state.resolving")} · ${t.what.toUpperCase()}`); return; }
   showToast(copy("state.resolving"), 30000);
   try {
     const r = await fetch(`${BACKEND}/play`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ kind: gridState.kind, id: it.id }),
+      body: JSON.stringify({ kind: gridState.kind, id: t.id, index }),
     }).then(r => r.json());
-    if (r.ok) { closeDetail(); showToast(`${copy("state.playing")}`, 1500); showView("tv"); }
-    else showToast(String(r.msg || "").toUpperCase() || copy("state.no-signal"), 4000);
+    if (r.ok) {
+      sources.playing = index;
+      sourcesShow(false);
+      closeDetail();
+      showToast(`${copy("state.playing")}`, 1500);
+      showView("tv");
+      return;
+    }
+    /* A torrent is not a channel: the copy the ranking picked can simply not
+       be there, and the only useful answer to that is the next copy. So a
+       failure opens the picker rather than ending at a message — the message
+       is still shown, above a list of everything else on offer. */
+    showToast(String(r.msg || "").toUpperCase() || copy("state.no-signal"), 4000);
+    openSources();
   } catch (_) { showToast(copy("state.offline"), 4000); }
+}
+
+/* =========================================================
+   THE STREAM PICKER
+
+   The channel list's twin, and built the same way on purpose: windowed rows
+   (a popular film comes back with sixty copies and eight of them are ever on
+   screen), red for the source that is playing, the glow for the row the
+   cursor is over.
+
+   The page never sees an infoHash or a magnet. /streams hands back an index
+   per row and /play takes that index back, so resolving — and TorrServer —
+   stay entirely on the backend's side of the wire.
+   ========================================================= */
+const sources = { open: false, list: [], sel: 0, top: 0, playing: -1, loading: false };
+
+const FIXTURE_STREAMS = [
+  { i: 0, label: "Torrentio 1080p Dune.Part.Two.2024.1080p.BluRay.x264", quality: "1080p",
+    size: "2.31 GB", seeds: 2081, source: "ThePirateBay", direct: false, outside: false },
+  { i: 1, label: "Torrentio 2160p Dune.Part.Two.2024.2160p.WEB-DL.DV.HDR.H265", quality: "2160p",
+    size: "18.4 GB", seeds: 431, source: "RARBG", direct: false, outside: false },
+  { i: 2, label: "Torrentio 1080p Dune.Part.Two.2024.1080p.WEBRip.x265", quality: "1080p",
+    size: "3.05 GB", seeds: 118, source: "1337x", direct: true, outside: false },
+  { i: 3, label: "Torrentio 720p Dune.Part.Two.2024.720p.HDTS", quality: "720p",
+    size: "1.10 GB", seeds: 44, source: "YTS", direct: false, outside: false },
+  { i: 4, label: "Torrentio 2160p Dune.Part.Two.2024.2160p.REMUX.AV1", quality: "2160p",
+    size: "61.2 GB", seeds: 6, source: "TorrentGalaxy", direct: false, outside: true },
+];
+
+function sourcesShow(on) {
+  sources.open = !!on;
+  document.getElementById("sources").classList.toggle("on", sources.open);
+}
+
+async function openSources() {
+  const t = playTarget();
+  if (!t) { showToast(copy("state.empty")); return; }
+
+  sources.sel = Math.max(0, sources.playing);
+  sources.top = 0;
+  sourcesShow(true);
+
+  if (FIXTURES) { sources.list = FIXTURE_STREAMS; renderSources(); return; }
+
+  sources.loading = true;
+  sources.list = [];
+  renderSources();
+  try {
+    const r = await fetch(`${BACKEND}/streams/${gridState.kind}/${t.id}`,
+      { signal: AbortSignal.timeout(25000) }).then(r => r.json());
+    sources.list = r.streams || [];
+    if (!sources.list.length && r.msg) showToast(String(r.msg).toUpperCase(), 4000);
+  } catch (_) {
+    showToast(copy("state.offline"), 4000);
+  }
+  sources.loading = false;
+  renderSources();
+}
+
+function renderSources() {
+  const rows = THEME.layout["source-list-rows"] || 8;
+  const n = sources.list.length;
+  sources.sel = Math.max(0, Math.min(sources.sel, n - 1));
+  if (sources.sel < sources.top) sources.top = sources.sel;
+  if (sources.sel > sources.top + rows - 1) sources.top = sources.sel - rows + 1;
+  sources.top = Math.max(0, Math.min(sources.top, Math.max(0, n - rows)));
+
+  const dot = THEME.layout["source-dot"] || 2.6;
+  const el = document.getElementById("srcrows");
+  const empty = document.getElementById("srcempty");
+
+  empty.textContent = n ? "" :
+    (sources.loading ? copy("state.loading") : copy("detail.no-sources"));
+
+  // One quality column, wide enough for the longest tag on the list, so every
+  // source name starts at the same x whether its row says 720P or 2160P.
+  const qW = Math.ceil(dotWidth(
+    Math.max(1, ...sources.list.map(s => (s.quality || "").length)), dot));
+
+  el.innerHTML = sources.list.slice(sources.top, sources.top + rows).map((s, i) => {
+    const idx = sources.top + i;
+    /* Release names are Latin by construction (scene naming is ASCII), but a
+       source name is not guaranteed to be, so only the quality tag — "1080P",
+       digits and Latin — is ever handed to the dot face. */
+    const tag = s.direct ? copy("detail.direct") : (s.outside ? copy("detail.outside") : "");
+    return `<div class="srcrow${idx === sources.sel ? " sel" : ""}` +
+           `${idx === sources.playing ? " live" : ""}${s.outside ? " outside" : ""}" data-i="${idx}">
+      <span class="sq" style="width:${qW}px">${s.quality ? dotSVG(s.quality.toUpperCase(), dot) : ""}</span>
+      <span class="sname">${escapeHTML(s.source || s.label || "")}</span>
+      <span class="stag">${escapeHTML(tag)}</span>
+      <span class="ssize">${escapeHTML(s.size || "")}</span>
+      <span class="sseeds">${s.seeds ? `${s.seeds} ${copy("detail.seeds")}` : ""}</span>
+      <span class="slive"></span>
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll(".srcrow").forEach(r =>
+    r.addEventListener("click", () => { sources.sel = +r.dataset.i; sourcesPick(); }));
+
+  document.getElementById("srccount").textContent = n ? `${sources.sel + 1}/${n}` : "";
+}
+
+function sourcesMove(dy) {
+  const n = sources.list.length;
+  if (!n) return;
+  sources.sel = (sources.sel + dy + n) % n;      // wraps, like the channel list
+  renderSources();
+}
+
+function sourcesPick() {
+  const s = sources.list[sources.sel];
+  if (!s) return;
+  playSelected(s.i);
 }
 
 /* =========================================================
@@ -967,11 +1404,19 @@ const ICONS = {
   news:     '<svg viewBox="0 0 40 40"><rect x="5" y="9" width="30" height="22"/><path d="M10 15h11M10 20h11M10 25h11M25 15h5M25 20h5M25 25h5"/></svg>',
   weather:  '<svg viewBox="0 0 40 40"><circle cx="15" cy="15" r="5"/><path d="M15 5v3M15 22v3M5 15h3M22 15h3M8 8l2 2M20 20l2 2M22 8l-2 2M10 20l-2 2"/><path d="M18 32h12a4.5 4.5 0 0 0 0-9 6.5 6.5 0 0 0-12.5 1.5A4 4 0 0 0 18 32z"/></svg>',
   music:    '<svg viewBox="0 0 40 40"><path d="M14 30V9l18-3v20"/><circle cx="10" cy="30" r="4"/><circle cx="28" cy="26" r="4"/></svg>',
+  gaming:   '<svg viewBox="0 0 40 40"><path d="M13 13h14a8 8 0 0 1 8 8v2a5 5 0 0 1-9 3l-1.5-2h-9L14 26a5 5 0 0 1-9-3v-2a8 8 0 0 1 8-8z"/><path d="M11 19v4M9 21h4"/><circle cx="27" cy="20" r="1.4" fill="currentColor"/><circle cx="30" cy="23" r="1.4" fill="currentColor"/></svg>',
 };
 
-/* Screens, not processes. Every one of these is a view in this page — the
-   clean split put channel numbers behind TV and gave everything else its
-   own screen, so there is no launch and no black frame anywhere. */
+/* Screens, not processes — with one exception.
+   Six of these are views in this page: the clean split put channel numbers
+   behind TV and gave everything else its own screen, so opening one starts
+   nothing and there is no black frame anywhere.
+
+   GAMING is the exception and cannot not be. A game needs the display, so it
+   goes through the launch machinery in server.py — `app` instead of `view` —
+   which is the one path in the product that starts a process. It came back in
+   August 2026 having been cut in July; the tile model was kept general enough
+   to take it, which is the whole reason this is a one-line difference. */
 const TILES = [
   { id: "tv",      view: "tv" },
   { id: "movies",  view: "grid", kind: "movie" },
@@ -979,6 +1424,7 @@ const TILES = [
   { id: "news",    view: "news" },
   { id: "weather", view: "weather" },
   { id: "music",   view: "music" },
+  { id: "gaming",  app: "gaming" },
 ];
 let sel = 0;
 const menuEl = document.getElementById("menu");
@@ -1003,8 +1449,55 @@ function refreshSel() {
 }
 function openSelected() {
   const t = TILES[sel];
+  if (t.app) { launchApp(t.app); return; }
   if (t.kind) gridState.kind = t.kind;
   showView(t.view);
+}
+
+/* The one path that starts a process. There is no demo mode here either: the
+   toast carries whatever the backend says went wrong — "gamescope is not
+   installed", "steam is not installed" — rather than a generic failure, and
+   the app's own output is already going to the journal tagged with its tile
+   id (server.py's pump). Between them, a tile that opens and shuts leaves a
+   trace in both places somebody would look. */
+async function launchApp(id) {
+  const name = copy(`tiles.${id}`);
+  if (FIXTURES) { showToast(`${copy("state.launching")} · ${name}`); return; }
+  showToast(`${copy("state.launching")} · ${name}`, 30000);
+  try {
+    const r = await fetch(`${BACKEND}/launch/${id}`, { method: "POST" }).then(r => r.json());
+    if (!r.ok) {
+      showToast(String(r.msg || "").toUpperCase() || copy("state.unavailable"), 6000);
+      return;
+    }
+    showToast(`${copy("state.running")} · ${name}`, 2000);
+    watchApp(id, name);
+  } catch (_) { showToast(copy("state.offline"), 4000); }
+}
+
+/* A successful POST only means the process started, and "started" is a much
+   weaker claim than it sounds: a missing gamescope makes the script exit 127
+   a tenth of a second later. Without this the TV says RUNNING and then simply
+   sits on the launcher, which is the original tile-that-opens-and-shuts bug
+   wearing a toast. So watch /status for a few seconds and say what happened.
+
+   Only the early death is reported. Quitting a game after an hour is not news;
+   dying before anything could have been drawn is. */
+function watchApp(id, name) {
+  let n = 0;
+  const tick = async () => {
+    if (++n > 6) return;                       // ~3s, then it is genuinely running
+    try {
+      const s = await fetch(`${BACKEND}/status`, { signal: AbortSignal.timeout(2000) })
+        .then(r => r.json());
+      if (s.running) { setTimeout(tick, 500); return; }
+      const e = s.last_exit || {};
+      if (e.id === id && !e.killed && e.code) {
+        showToast(`${name} · ${copy("state.unavailable")} (${e.code})`, 6000);
+      }
+    } catch (_) { /* backend went away; the offline toast covers that */ }
+  };
+  setTimeout(tick, 500);
 }
 
 /* =========================================================
@@ -1169,33 +1662,93 @@ async function musicCmd(cmd) {
    ========================================================= */
 function onNav(dx, dy) {
   if (view === "home") { sel = (sel + dx + TILES.length) % TILES.length; refreshSel(); }
-  else if (view === "tv") { if (dy) tvZap(dy); }
-  else if (view === "grid") { if (!gridState.detail) gridMove(dx, dy); }
+  else if (view === "tv") {
+    // With the list up the arrows belong to it; with it down they zap.
+    if (chanList.open) { if (dy) chanListMove(dy); }
+    else if (dy) tvZap(dy);
+  }
+  else if (view === "grid") {
+    // Innermost thing first: the picker sits over the panel, which sits over
+    // the grid, and each one claims the arrows while it is up.
+    if (sources.open) { if (dy) sourcesMove(dy); }
+    else if (!gridState.detail) gridMove(dx, dy);
+    // In a show's detail panel the arrows drive the season/episode chooser.
+    // A film's has nothing to move through — its reviews scroll themselves.
+    else if (gridState.kind !== "movie") seriesMove(dx, dy);
+  }
   else if (view === "music") { if (dx) musicCmd(dx > 0 ? "next" : "previous"); }
 }
 function onOk() {
   if (view === "home") openSelected();
-  else if (view === "grid") { gridState.detail ? playSelected() : openDetail(); }
+  else if (view === "grid") {
+    if (sources.open) sourcesPick();
+    else if (gridState.detail) playSelected();
+    else openDetail();
+  }
   else if (view === "music") musicCmd("playpause");
-  else if (view === "tv") tvShow();          // re-show the bar
+  else if (view === "tv") { chanList.open ? chanListPick() : chanListShow(true); }
 }
 function onBack() {
+  // One layer at a time, outermost last. Collapsing two at once is how a
+  // press meant for the picker also stops the film behind it.
+  if (view === "grid" && sources.open) { sourcesShow(false); return; }
   if (view === "grid" && gridState.detail) { closeDetail(); return; }
+  // Ⓑ closes the channel list without leaving the channel — one step at a
+  // time, or dismissing the list would also stop the picture behind it.
+  if (view === "tv" && chanList.open) { chanListShow(false); return; }
   if (view === "tv") tvStop();
   if (view !== "home") goBack();
 }
 function onDigit(d) { if (view === "tv") tvDigit(d); }
 
+/* "Show me the other copies of this." Only means anything over a title, so
+   it is a no-op everywhere else rather than a surprise. */
+function onSources() {
+  if (view !== "grid") return;
+  if (sources.open) { sourcesShow(false); return; }
+  if (!gridState.detail) return;
+  openSources();
+}
+
+/* Back to the launcher from anywhere, including out of a launched app. The
+   gamepad does this by holding the guide button (daemon/homebutton.py) and a
+   TV remote by its Exit key (daemon/cecd.py); both post /home. The keyboard
+   posts the same endpoint, so all three take the identical path — killing the
+   running app and stopping the player — rather than three near-copies. */
+async function onHome() {
+  if (view === "grid") closeDetail();
+  if (view === "tv") chanListShow(false);
+  showView("home");
+  if (FIXTURES) return;
+  try { await fetch(`${BACKEND}/home`, { method: "POST" }); } catch (_) {}
+}
+
+/* The keyboard is the primary input until the gamepad is tested, so every
+   intent has a key and nothing is reachable only by controller. Held to the
+   same rule as the rest of the input layer: these produce intents, and the
+   intents are routed by whichever view is up — there is no per-screen key
+   handling anywhere. */
 addEventListener("keydown", (e) => {
-  if (e.key === "ArrowRight") onNav(1, 0);
-  else if (e.key === "ArrowLeft") onNav(-1, 0);
-  else if (e.key === "ArrowDown") onNav(0, 1);
-  else if (e.key === "ArrowUp") onNav(0, -1);
-  else if (e.key === "PageUp") onNav(0, -1);
-  else if (e.key === "PageDown") onNav(0, 1);
-  else if (e.key === "Enter") onOk();
-  else if (e.key === "Escape" || e.key === "Backspace") onBack();
-  else if (/^[0-9]$/.test(e.key)) onDigit(e.key);
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const k = e.key;
+  let handled = true;
+
+  if (k === "ArrowRight" || k === "d") onNav(1, 0);
+  else if (k === "ArrowLeft" || k === "a") onNav(-1, 0);
+  else if (k === "ArrowDown" || k === "s" || k === "PageDown") onNav(0, 1);
+  else if (k === "ArrowUp" || k === "w" || k === "PageUp") onNav(0, -1);
+  else if (k === "Enter" || k === " ") onOk();
+  else if (k === "Escape" || k === "Backspace") onBack();
+  else if (k === "Home" || k === "h") onHome();
+  // The picker's own key. Not Ⓐ, because Ⓐ already means "play this" here and
+  // the picker is the thing you reach for when that did not work.
+  else if (k === "o" || k === "F3") onSources();
+  else if (/^[0-9]$/.test(k)) onDigit(k);
+  else handled = false;
+
+  // Space and the arrows scroll a page by default, and this one is a fixed
+  // viewport where that means the whole UI slides out from under the cursor.
+  if (handled) e.preventDefault();
 });
 
 const pad = { l: false, r: false, u: false, d: false, a: false, b: false };
@@ -1222,17 +1775,43 @@ function pollPads() {
 /* =========================================================
    BOOT
    ========================================================= */
+const H = (pairs) => pairs.map(([k, v]) => `<span><b>${k}</b>&nbsp;&nbsp;${v}</span>`).join("");
+
+/* The detail panel's hints change with the kind: a film is one button, a show
+   is a chooser. Drawn per open rather than once at boot for that reason. */
+function drawDetailHints(isShow) {
+  // The picker is worth naming on the panel: it is the answer to "it did not
+  // play", and a key nobody knows about is a key nobody presses.
+  const src = ["⊙", copy("hints.sources")];
+  document.getElementById("detailhints").innerHTML = isShow
+    ? H([["◂ ▸", copy("hints.season")], ["▴ ▾", copy("hints.episode")],
+         ["Ⓐ", copy("hints.play")], src, ["Ⓑ", copy("hints.back")]])
+    : H([["Ⓐ", copy("hints.play")], src, ["Ⓑ", copy("hints.back")]]);
+}
+
 function drawHints() {
-  const H = (pairs) => pairs.map(([k, v]) => `<span><b>${k}</b>&nbsp;&nbsp;${v}</span>`).join("");
   document.getElementById("homehints").innerHTML =
     H([["◂ ▸", copy("hints.navigate")], ["Ⓐ", copy("hints.open")], ["HOLD ⌂", copy("hints.home")]]);
   document.getElementById("gridhints").innerHTML =
     H([["◂ ▸ ▴ ▾", copy("hints.navigate")], ["Ⓐ", copy("hints.open")], ["Ⓑ", copy("hints.back")]]);
-  document.getElementById("detailhints").innerHTML =
-    H([["Ⓐ", copy("hints.play")], ["Ⓑ", copy("hints.back")]]);
+  drawDetailHints(false);
   document.getElementById("mhints").innerHTML =
     H([["◂ ▸", copy("hints.track")], ["Ⓐ", copy("hints.playpause")], ["Ⓑ", copy("hints.back")]]);
   document.getElementById("wxhints").innerHTML = H([["Ⓑ", copy("hints.back")]]);
+
+  // TV: the bar carries the one hint that makes the list findable at all,
+  // and the list carries its own once it is up.
+  document.getElementById("barhint").innerHTML = H([["Ⓐ", copy("hints.channels")]]);
+  document.getElementById("chanhead").innerHTML =
+    dotSVG(copy("tv.channels"), 4.4, { assemble: true });
+  document.getElementById("chanhints").innerHTML =
+    H([["▴ ▾", copy("hints.channel")], ["Ⓐ", copy("hints.tune")], ["Ⓑ", copy("hints.back")]]);
+
+  // The stream picker, built to read as the channel list's twin.
+  document.getElementById("srchead").innerHTML =
+    dotSVG(copy("detail.sources"), 4.4, { assemble: true });
+  document.getElementById("srchints").innerHTML =
+    H([["▴ ▾", copy("hints.source")], ["Ⓐ", copy("hints.play")], ["Ⓑ", copy("hints.back")]]);
 }
 
 async function loadConfig() {
@@ -1277,6 +1856,10 @@ async function boot() {
     refreshSel();
     showView(want);
 
+    // &list=1 pulls the channel list up on the TV screen. Same rule as the
+    // grid's flags below: it is the Ⓐ press, not a second way to draw it.
+    if (want === "tv" && q.get("list")) setTimeout(() => chanListShow(true), 400);
+
     // &sel=N puts the grid cursor on an item and &detail=1 opens its panel,
     // so a scrolled grid and the detail screen are both reachable without a
     // gamepad. Navigation only — neither invents data.
@@ -1289,7 +1872,10 @@ async function boot() {
           gridState.page = Math.floor(gridState.sel / perPage());
           renderGrid();
         }
-        if (q.get("detail")) openDetail();
+        if (q.get("detail")) await openDetail();
+        // &sources=1 pulls the stream picker up over the panel. Same rule as
+        // &list=1 on TV: it is the key press, not a second way to draw it.
+        if (q.get("sources")) await openSources();
       }, 400);
     }
   }
@@ -1298,4 +1884,7 @@ boot();
 
 /* Exposed for the headless render test (test/render.mjs) — it drives the
    real module rather than a copy, so the test cannot drift from the UI. */
-Object.assign(globalThis, { showView, onNav, onOk, onBack, onDigit, THEME, dotSVG, fitDots });
+Object.assign(globalThis, {
+  showView, onNav, onOk, onBack, onDigit, onHome, onSources,
+  chanListShow, sourcesShow, openSources, THEME, dotSVG, fitDots,
+});

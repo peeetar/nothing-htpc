@@ -63,6 +63,27 @@ MPV_ARGS=(
   --hwdec=auto-safe
 )
 
+# Video output. Left to mpv on the box: the Pi's KMS/GL path is the one it
+# picks by itself and the one that gets hardware decode.
+#
+# HTPC_MPV_VO_ARGS replaces that choice where the GPU is not usable — a nested
+# cage under pixman, a VM, a broken driver. This is not a "slower video"
+# fallback, it is the difference between a player and a core dump: mpv's
+# default gpu-next asks for Vulkan, gets VK_ERROR_SURFACE_LOST_KHR, walks its
+# fallback chain to X11 and dies on an assertion in vo_x11_init — and because
+# it survives being idle and only dies on the first loadfile, it looks like
+# the stream is broken rather than the video output.
+#
+# Measured inside a nested cage, three options, one survivor:
+#   (default)  survives idle, dies on the first file      <- the crash above
+#   wlshm      dies immediately: idle has no image format for libswscale
+#   gpu/OpenGL survives idle and plays                    <- what dev-session sets
+if [ -n "${HTPC_MPV_VO_ARGS:-}" ]; then
+  read -ra _vo_args <<< "$HTPC_MPV_VO_ARGS"
+  MPV_ARGS+=("${_vo_args[@]}")
+  echo "session | mpv video output overridden: $HTPC_MPV_VO_ARGS"
+fi
+
 if command -v mpv >/dev/null; then
   tag mpv mpv "${MPV_ARGS[@]}"
 else
@@ -89,6 +110,22 @@ fi
 sleep 1
 
 # Kiosk browser = the launcher UI. When this exits, the session ends.
+#
+# The binary is probed, not assumed. Debian and Raspberry Pi OS ship it as
+# `chromium`; Fedora ships the identical thing as `chromium-browser`. This
+# used to say `chromium` outright, so on Fedora the whole session died one
+# second after starting with "chromium: command not found" and status 127 —
+# and since Chromium exiting *is* the end of the session, that read as the
+# box refusing to boot rather than as a missing package.
+CHROMIUM=""
+for c in chromium chromium-browser chromium-freeworld google-chrome google-chrome-stable; do
+  if command -v "$c" >/dev/null; then CHROMIUM="$c"; break; fi
+done
+if [ -z "$CHROMIUM" ]; then
+  echo "session | no chromium found (tried chromium, chromium-browser," \
+       "chromium-freeworld, google-chrome) — there is no UI to show" >&2
+  exit 127
+fi
 #
 # The memory flags are not superstition on a 1GB Pi 3B+: the launcher is one
 # static page, but Chromium will still reserve a few hundred MB it never
@@ -127,14 +164,14 @@ if [ -n "$DEBUG" ]; then
   # Sends the page's console.log/errors to stderr, which is how a launcher
   # JS exception becomes visible on a box with no devtools.
   CHROME_ARGS+=(--enable-logging=stderr --log-level=0)
-  echo "session | chromium ${CHROME_ARGS[*]}"
+  echo "session | $CHROMIUM ${CHROME_ARGS[*]}"
   # A pipeline cannot be exec'd away, so this branch ends the script itself —
   # falling through would start a second, untagged Chromium.
-  chromium "${CHROME_ARGS[@]}" 2>&1 \
+  "$CHROMIUM" "${CHROME_ARGS[@]}" 2>&1 \
     | while IFS= read -r line; do printf 'chromium | %s\n' "$line"; done
   rc=${PIPESTATUS[0]}
-  echo "session | chromium exited with status $rc — session over"
+  echo "session | $CHROMIUM exited with status $rc — session over"
   exit "$rc"
 fi
 
-exec chromium "${CHROME_ARGS[@]}"
+exec "$CHROMIUM" "${CHROME_ARGS[@]}"

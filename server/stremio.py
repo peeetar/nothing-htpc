@@ -60,14 +60,32 @@ STREAM_ADDONS = [
 # instead, which is the one upgrade that removes BitTorrent from the box.
 TORRENTIO_OPTS = os.environ.get("TORRENTIO_OPTS", "").strip("/")
 
-# Playback envelope. On the Pi this is a correctness rule, not a preference:
-# a 2160p HEVC remux is a slideshow on a 3B+ (CLAUDE.md constraint 11). On
-# x86 hardware it relaxes — it is a profile value, not a law.
-MAX_HEIGHT = int(os.environ.get("HTPC_MAX_HEIGHT", "1080"))
-ALLOW_HEVC = os.environ.get("HTPC_ALLOW_HEVC", "") not in ("", "0")
+# Playback envelope.
+#
+# This used to be a correctness rule enforcing the Pi 3B+: 1080p, H.264 only,
+# because a 2160p AV1 remux on a 3B+ is a slideshow rather than a film. The Pi
+# is out of the picture (August 2026) and the targets are an x86_64 laptop now
+# and an AMD-GPU box later, both of which decode HEVC, VP9 and AV1 in hardware.
+# So it inverts: everything is allowed by default, and these exist to *tighten*
+# the envelope for weaker hardware rather than to loosen it for better.
+#
+#   HTPC_MAX_HEIGHT=1080   cap the resolution
+#   HTPC_ALLOW_HEVC=0      push HEVC/VP9/AV1 down the list
+#
+# Nothing is ever dropped for being outside the envelope — a stream that is
+# only available as 2160p HEVC still plays, it just sorts last. With the
+# stream picker the choice is the owner's anyway; this only decides what Ⓐ
+# reaches for first.
+MAX_HEIGHT = int(os.environ.get("HTPC_MAX_HEIGHT", "2160"))
+ALLOW_HEVC = os.environ.get("HTPC_ALLOW_HEVC", "1") not in ("", "0")
 
 TIMEOUT = float(os.environ.get("HTPC_HTTP_TIMEOUT", "10"))
 CATALOG_TTL = float(os.environ.get("HTPC_CATALOG_TTL", "900"))   # 15 min
+# Streams are cached far more briefly than the catalogue, and for a different
+# reason: the picker hands back an *index* into this list, so the list has to
+# still mean the same thing when the choice comes back. Long enough to browse
+# and pick, short enough that a magnet is never minted from stale data.
+STREAM_TTL = float(os.environ.get("HTPC_STREAM_TTL", "300"))     # 5 min
 
 _cache = {}
 _cache_lock = threading.Lock()
@@ -150,6 +168,42 @@ def _cinemeta_credits(m):
     }
 
 
+def _episodes(m):
+    """Cinemeta's `videos` -> the rows the season/episode chooser draws.
+
+    Every episode already carries the id Torrentio wants — "tt11198330:1:3",
+    the show's IMDb id with a season and an episode glued on — so choosing one
+    needs no second lookup and /play takes it unchanged.
+
+    Season 0 is where Cinemeta files recaps, premiere specials and behind-the-
+    scenes featurettes. They are real videos and they are kept, but they sort
+    to the end: nobody opens a show to watch its making-of first.
+
+    Deliberately thin. A long-running show has hundreds of these and the Pi
+    has 1 GB, so an episode is a title and a date — the overview would be
+    kilobytes per row for a line this screen has nowhere to draw.
+    """
+    out = []
+    for v in m.get("videos") or []:
+        number = v.get("episode", v.get("number"))
+        season = v.get("season")
+        if not v.get("id") or season is None or number is None:
+            continue
+        try:
+            season, number = int(season), int(number)
+        except (TypeError, ValueError):
+            continue
+        out.append({
+            "id": v["id"],
+            "season": season,
+            "episode": number,
+            "title": (v.get("name") or "").strip(),
+            "released": (v.get("released") or v.get("firstAired") or "")[:10],
+        })
+    out.sort(key=lambda e: (e["season"] == 0, e["season"], e["episode"]))
+    return out
+
+
 def _minutes(runtime):
     """Cinemeta gives runtime as a human string ("142 min"), not a number."""
     if not runtime:
@@ -196,6 +250,13 @@ def meta(kind, imdb_id):
             raise StremioError("no metadata for %s" % imdb_id)
         row = _meta_row(m)
 
+        # A show's detail panel spends its bottom half on seasons and episodes
+        # where a film's spends it on reviews, so only one of these is ever
+        # worth fetching — and reviews of a series as a whole are the less
+        # useful half of that trade.
+        if kind == "series":
+            row["episodes"] = _episodes(m)
+
         # Credits from Cinemeta, then overwritten by TMDB's fuller set if a key
         # is configured. Reviews only ever come from TMDB — Cinemeta has none.
         row["credits"] = _cinemeta_credits(m)
@@ -208,7 +269,10 @@ def meta(kind, imdb_id):
                 # keyless one.
                 row["credits"] = {k: (better.get(k) or row["credits"].get(k) or [])
                                   for k in ("director", "producer", "writer", "cast")}
-            row["reviews"] = tmdb.reviews(kind, row["tmdb_id"])
+            # Not for a series: its half of the panel is the episode chooser,
+            # so this would be a TMDB round trip for something never drawn.
+            if kind != "series":
+                row["reviews"] = tmdb.reviews(kind, row["tmdb_id"])
         return row
 
     return _cached(key, CATALOG_TTL, produce)
@@ -217,70 +281,170 @@ def meta(kind, imdb_id):
 # --- streams -----------------------------------------------------------------
 
 _HEIGHT_RE = re.compile(r"(\d{3,4})p")
-_HEVC_RE = re.compile(r"\b(hevc|x265|h\.?265)\b", re.I)
+_HEVC_RE = re.compile(r"\b(hevc|x265|h\.?265|vp9|av1)\b", re.I)
 _SEEDS_RE = re.compile(r"(?:👤|seeders?[:\s])\s*(\d+)", re.I)
+_SIZE_RE = re.compile(r"(?:💾|size[:\s])\s*([\d.]+\s*[KMGT]i?B)", re.I)
+_SOURCE_RE = re.compile(r"(?:⚙️|⚙)\s*([^\n]+)")
 
 
-def _stream_rank(s):
-    """Sort key: playable first, then by seeders. Lower is better.
+def _seed_bucket(seeds):
+    """Seeders, coarsened.
 
-    Torrentio puts quality and seeder count in the human-readable `title`,
-    not in fields, so this reads them out of the string. A title that does
-    not say its resolution is assumed fine rather than excluded — being
-    conservative here means rejecting every stream for some films.
+    Ranking on the raw count makes a 2160p copy with 2,100 seeders lose to a
+    720p one with 2,140 — a difference nobody can perceive deciding a
+    difference everybody can. Bucketing means seeders decide only when they
+    differ by an order of magnitude, and resolution decides inside a bucket.
+    """
+    if seeds >= 500:
+        return 4
+    if seeds >= 100:
+        return 3
+    if seeds >= 20:
+        return 2
+    if seeds >= 5:
+        return 1
+    return 0
+
+
+def _parse(s):
+    """Everything the picker draws about one stream, read out of its text.
+
+    Torrentio puts quality, size, seeders and the indexer it came from in the
+    human-readable `title` rather than in fields, so this is string work by
+    necessity. Anything missing stays empty — the picker draws what it has,
+    and a stream whose title does not state its resolution is treated as
+    inside the envelope rather than excluded (being strict here rejects every
+    copy of some films).
     """
     text = "%s %s" % (s.get("name") or "", s.get("title") or "")
     height = 0
     m = _HEIGHT_RE.search(text)
     if m:
         height = int(m.group(1))
-    too_big = height > MAX_HEIGHT
-    hevc = bool(_HEVC_RE.search(text)) and not ALLOW_HEVC
     seeds = 0
     m = _SEEDS_RE.search(text)
     if m:
         seeds = int(m.group(1))
-    # Unplayable candidates sort last rather than being dropped: if the only
-    # copies of a film are HEVC, playing one badly beats "no streams found".
-    return (1 if too_big else 0, 1 if hevc else 0, -seeds)
+    size = ""
+    m = _SIZE_RE.search(text)
+    if m:
+        size = re.sub(r"\s+", " ", m.group(1)).strip()
+    source = ""
+    m = _SOURCE_RE.search(s.get("title") or "")
+    if m:
+        source = m.group(1).strip()[:24]
+    return {
+        "height": height,
+        "seeds": seeds,
+        "size": size,
+        "source": source,
+        "efficient": bool(_HEVC_RE.search(text)),
+    }
+
+
+def _stream_rank(s):
+    """Sort key, lower is better: inside the envelope, well seeded, then big.
+
+    The envelope is a preference now rather than a filter (see MAX_HEIGHT
+    above) — nothing is dropped, it only sorts last. Order of the keys is the
+    argument: a stream nobody is seeding does not play at all, so seeders
+    outrank resolution; within a seeding tier, more pixels wins.
+    """
+    p = _parse(s)
+    too_big = p["height"] > MAX_HEIGHT
+    wrong_codec = p["efficient"] and not ALLOW_HEVC
+    return (1 if too_big else 0,
+            1 if wrong_codec else 0,
+            -_seed_bucket(p["seeds"]),
+            -p["height"],
+            -p["seeds"])
 
 
 def streams(kind, imdb_id):
     """Ask each addon in turn; the first one with streams wins.
+
+    Cached for STREAM_TTL, which is what makes the picker's indices mean
+    anything: the list the UI drew and the list /play indexes into have to be
+    the same list, or choosing the third row plays whatever has drifted into
+    third place since.
 
     Errors from a dead host are collected rather than raised, so the message
     that reaches the TV describes the whole attempt ("no streams found")
     rather than whichever host happened to be first in the list.
     """
     kind = "series" if kind in ("show", "series") else "movie"
-    opts = "/" + TORRENTIO_OPTS if TORRENTIO_OPTS else ""
-    problems = []
+    key = ("streams", kind, imdb_id)
 
-    for base in STREAM_ADDONS:
-        url = "%s%s/stream/%s/%s.json" % (base, opts, kind, imdb_id)
-        try:
-            data = _get(url, timeout=max(TIMEOUT, 20))
-        except StremioError as e:
-            problems.append(str(e))
-            continue
-        out = data.get("streams") or []
-        if out:
-            return sorted(out, key=_stream_rank)
-        problems.append("%s has nothing for this title" % _host(base))
+    def produce():
+        opts = "/" + TORRENTIO_OPTS if TORRENTIO_OPTS else ""
+        problems = []
+        for base in STREAM_ADDONS:
+            url = "%s%s/stream/%s/%s.json" % (base, opts, kind, imdb_id)
+            try:
+                data = _get(url, timeout=max(TIMEOUT, 20))
+            except StremioError as e:
+                problems.append(str(e))
+                continue
+            out = data.get("streams") or []
+            if out:
+                for row in out:
+                    # Which addon answered, so the picker can say where a
+                    # stream came from even when the title does not.
+                    row.setdefault("_addon", _host(base))
+                return sorted(out, key=_stream_rank)
+            problems.append("%s has nothing for this title" % _host(base))
+        raise StremioError("no streams found (%s)" % "; ".join(problems[:2]))
 
-    raise StremioError("no streams found (%s)" % "; ".join(problems[:2]))
+    return _cached(key, STREAM_TTL, produce)
 
 
-def resolve(kind, imdb_id):
-    """Pick the best stream and return a URL mpv can open.
+def stream_rows(kind, imdb_id):
+    """The ranked stream list, thinned to what the picker draws.
 
-    Two shapes come back from Torrentio and both are handled here so callers
+    `i` is the index into the cached list and is what comes back to /play —
+    the page never handles an infoHash or a magnet, which keeps the resolve
+    step (and TorrServer) entirely on this side.
+    """
+    rows = []
+    for i, s in enumerate(streams(kind, imdb_id)):
+        p = _parse(s)
+        rows.append({
+            "i": i,
+            "label": _label(s),
+            "quality": ("%dp" % p["height"]) if p["height"] else "",
+            "size": p["size"],
+            "seeds": p["seeds"],
+            "source": p["source"] or s.get("_addon", ""),
+            # A debrid link plays straight away; a magnet has to be downloaded
+            # by TorrServer first, and that is worth saying before Ⓐ.
+            "direct": bool(s.get("url")),
+            "outside": p["height"] > MAX_HEIGHT or (p["efficient"] and not ALLOW_HEVC),
+        })
+    return rows
+
+
+def resolve(kind, imdb_id, index=0):
+    """Turn the chosen stream into a URL mpv can open.
+
+    `index` is a row from stream_rows — 0 (the ranking's own pick) unless the
+    owner opened the picker and chose another. Out of range is an error with
+    a sentence rather than a clamp: silently playing something other than the
+    row that was selected is the one behaviour a picker must never have.
+
+    Two shapes come back from the addons and both are handled here so callers
     never have to care which one they got:
 
       `url`       already playable (a debrid link). Returned as-is.
       `infoHash`  a torrent. Handed to TorrServer, which returns an HTTP URL.
     """
-    best = streams(kind, imdb_id)[0]
+    found = streams(kind, imdb_id)
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        index = 0
+    if not 0 <= index < len(found):
+        raise StremioError("that stream is no longer in the list")
+    best = found[index]
 
     if best.get("url"):
         return best["url"], _label(best)

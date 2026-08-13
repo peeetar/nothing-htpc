@@ -10,6 +10,12 @@
   "tmdb_key": "",
   "_note_tmdb": "OPTIONAL, and the only key this project wants. Without it the film detail panel shows what Cinemeta gives away free: a director, a writer and three cast. With it you also get the producer, five cast, and three user reviews with star ratings. Free at themoviedb.org/settings/api — it does not expire and there is no OAuth flow. Put the real value in config.local.json, not here: this file is tracked.",
 
-  "apps": [],
-  "_note_apps": "Tiles that launch a *process*. Empty, and that is the point of the July 2026 remodel: TV, MOVIES, SHOWS, NEWS, WEATHER and MUSIC are all screens inside the launcher page now, so opening one starts nothing and there is no black frame between the menu and the picture. The launch machinery in server.py stays for whatever comes next — a gamescope tile is the expected one. An entry is {id, label, command: [...]}; $HTPC_DIR in a command expands to the repo root, so no absolute path is ever baked in."
+  "apps": [
+    {
+      "id": "gaming",
+      "label": "GAMING",
+      "command": ["${HTPC_DIR}/system/gamescope-session.sh"]
+    }
+  ],
+  "_note_apps": "Tiles that launch a *process*, as opposed to the screens the launcher page draws itself. TV, MOVIES, SHOWS, NEWS, WEATHER and MUSIC are all views inside one page, which is why opening one starts nothing and there is no black frame between the menu and the picture. GAMING cannot work that way — a game needs the display — so it goes through the launch machinery in server.py, which was kept through the July 2026 remodel for exactly this. An entry is {id, label, command: [...]}; $HTPC_DIR expands to the repo root, so no absolute path is ever baked in. Tuning for the game session (resolution, refresh, extra gamescope flags) is environment, not config: see system/gamescope-session.sh."
 }

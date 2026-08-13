@@ -21,7 +21,7 @@ export const THEME = {
 };
 
 /* Deep-merge a profile over the base. Objects merge, scalars replace —
-   which is exactly what a profile is: `pi3` names only the handful of
+   which is exactly what a profile is: `lite` names only the handful of
    values it wants to change and inherits the rest. */
 function merge(base, over) {
   const out = { ...base };

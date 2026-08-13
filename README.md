@@ -1,41 +1,48 @@
 # nothing-htpc
 
-A controller-only home theater box with a Nothing-OS-inspired shell:
-pure black, dot-matrix type, one red accent, six screens. No desktop
-environment, no Kodi, nothing to break on update.
+A home theater box with a Nothing-OS-inspired shell: pure black,
+dot-matrix type, one red accent, seven screens. No desktop environment,
+no Kodi, nothing to break on update.
 
-It runs on a **Raspberry Pi 3B+ cable-tied behind the TV**. No tower,
-no fan, one HDMI cable and one power lead.
+**Targets, as of 13 August 2026:** a Fedora x86_64 laptop, where it is
+developed and taken to production ready, and an **AMD-GPU HTPC** it is
+installed on once it is finished. The Raspberry Pi 3B+ it ran on through
+July 2026 is retired — see [the note below](#the-pi-is-gone).
 
-**One page draws everything.** mpv runs underneath for the whole session,
-idle when nothing is on, and the launcher is composited over it — so
-opening a screen starts no process and there is never a black frame
-between the menu and the picture.
+**One page draws everything except a game.** mpv runs underneath for the
+whole session, idle when nothing is on, and the launcher is composited
+over it — so opening a screen starts no process and there is never a
+black frame between the menu and the picture.
 
-- **TV** — live channels, zapped by number. A bar at the bottom carries
-  the channel number, its name and the clock, then fades. Numbers live
-  here and nowhere else (see [cabletv/README.md](cabletv/README.md))
+- **TV** — live channels, zapped by number or picked off a channel list
+  that slides in over the picture. A bar at the bottom carries the
+  channel number, its name and the clock, then fades. Numbers live here
+  and nowhere else (see [cabletv/README.md](cabletv/README.md))
 - **MOVIES / SHOWS** — a poster grid over the Stremio addon protocol:
   Cinemeta for the catalogue, Torrentio for streams, TorrServer to play
-  them. Five rows to a page, and a detail panel with credits and reviews
+  them. Five rows to a page, and a detail panel that carries credits and
+  scrolling user reviews for a film, and a season/episode chooser for a
+  show. If a stream will not play, a **source picker** lists every other
+  copy — quality, size, seeders, indexer — and one press plays a
+  different one
 - **NEWS** — Time.mk by category across the top half, Θεσσαλονίκη across
   the bottom, headlines scrolling
 - **WEATHER** — Skopje, Ljubljana and Θεσσαλονίκη: current conditions
   and three days each
 - **MUSIC** — the box is a Spotify Connect speaker; the phone picks the
   music and the TV shows it
-- **HDMI-CEC** — the Pi has a real CEC line, so **the TV remote drives
-  the whole thing**. Arrows and OK navigate everywhere; the number keys
-  tune channels.
-- **Controller optional** — an 8BitDo pad works everywhere; hold the
-  guide button ~1 s to return home.
+- **GAMING** — Steam Big Picture inside gamescope. The one tile that
+  starts a process, because a game needs the display
+- **Keyboard first** — every function on every screen has a key. The
+  gamepad is not tested yet, so nothing is reachable only by controller.
+  See [the key map](#the-keyboard)
+- **HDMI-CEC** — where the box has a CEC line, **the TV remote drives the
+  whole thing**. Arrows and OK navigate everywhere; the number keys tune
+  channels.
 
 Every colour, size, spacing, duration and user-facing string in the whole
 UI comes from one file, [`launcher/theme.json`](launcher/theme.json).
 Editing it restyles the product; nothing else should need touching.
-
-Idle footprint is roughly 400–500 MB of the Pi's 1 GB, and ~0 % CPU at
-the menu.
 
 > **The July 2026 remodel replaced the retro cable-TV mode.** The 1990s
 > pastiche — analog static, teletext pages, the ASS-drawn banner — is
@@ -43,44 +50,59 @@ the menu.
 > is the decision record. The last commit before it is tagged
 > `pre-remodel`.
 
-> Moving from the old x86 build? See [PACKAGING.md](PACKAGING.md) and the
-> [x86 notes](#appendix-the-x86-tower-build) at the end. The Pulse-Eight
-> CEC adapter, the suspend/wake hooks and the GAMING tile are all gone —
-> the Pi has no S3 sleep and is not a games machine.
+## The Pi is gone
+
+**13 August 2026.** The Raspberry Pi 3B+ is no longer a target. The box
+is being finished on a Fedora x86_64 Lenovo laptop and then installed on
+an AMD-GPU HTPC.
+
+That is not just a hardware swap — three rules the Pi imposed have been
+inverted, and the code and the docs say so now:
+
+| Was, for the Pi | Is, for x86 |
+|---|---|
+| H.264 only, 1080p max, enforced in stream ranking | HEVC/VP9/AV1 and 2160p allowed by default; `HTPC_MAX_HEIGHT` and `HTPC_ALLOW_HEVC` now *tighten* the envelope rather than loosen it |
+| `theme.json`'s `pi3` profile kept a 1 GB board alive | renamed `lite` — a generic low-power fallback, not a description of a board anyone owns |
+| GAMING tile removed; "design for it, don't build it" | GAMING is back, launching Steam Big Picture in gamescope |
+
+What did **not** change: no build step, stdlib-only backend, one themed
+page, windowed lists, and every string still in `theme.json`. Most of
+those were justified by the Pi originally and turned out to be worth
+keeping on their own merits.
+
+The one thing genuinely lost is HDMI-CEC-by-default. The Pi had a CEC
+line on its HDMI connector; a laptop does not, and a desktop needs an
+adapter. `cecd.py` exits quietly when there is no `/dev/cec0`, so
+nothing breaks — the TV remote simply does not drive the box until it
+runs somewhere with CEC.
 
 ## Hardware
 
-| Part | Used here | Notes |
+| Part | Development | Production |
 |---|---|---|
-| Computer | Raspberry Pi 3B+ | 1 GB RAM, quad A53 @1.4 GHz, HDMI 1.4 |
-| Power | **5 V 2.5 A official supply** | see the warning below — this one matters |
-| Cooling | heatsink, ideally a vented case | it will sit in still air behind a panel |
-| Storage | 16 GB+ A1 microSD | or boot from USB |
-| CEC | none — it is on the HDMI connector | the reason a Pi works here at all |
-| Controller | 8BitDo Ultimate 2C (optional) | 2.4 GHz dongle or Bluetooth |
+| Computer | Lenovo laptop, Fedora, Ryzen 7 PRO 5850U | AMD-GPU HTPC |
+| Graphics | Radeon (integrated), `amdgpu` | Radeon, `amdgpu` |
+| Video decode | VA-API — H.264, HEVC, VP9, AV1 | same |
+| Output | laptop panel | TV over HDMI, 1080p or 2160p |
+| CEC | none | HDMI, or a Pulse-Eight adapter |
+| Gaming | not usable (nested gamescope) | gamescope + Steam |
+| Controller | 8BitDo Ultimate 2C — **not yet tested** | same |
 | NAS | anything running Jellyfin | Docker or native |
 
-### Three things about the 3B+ that shape everything else
+**The two machines share a graphics stack**, which is the useful part:
+the same `amdgpu` driver, the same VA-API decode path, the same mpv video
+output. What is proven on the laptop is very likely to hold on the box —
+which is exactly why the laptop is now the acceptance machine and not
+just a convenience.
 
-**Do not power it from the TV's USB port.** It is the obvious move when
-you are hiding a Pi behind a TV, and it is wrong: TV USB ports supply
-500–900 mA, the 3B+ wants 2.5 A. You get brownouts under load, which on
-a Pi means corrupted SD cards rather than a clean crash. Use the real
-supply. (It also means the Pi stays on when the TV is off — which is
-what you want; CEC handles the rest, and idle draw is ~2 W.)
+Both decode everything in hardware and have real RAM, so the 1 GB budget
+that shaped the original design is gone. The habits it produced — one
+renderer, windowed lists, no Electron tiles — are kept because they are
+good habits, not because they are still forced.
 
-**No HEVC decoder.** The 3B+ decodes H.264 in hardware up to 1080p and
-has nothing at all for H.265, VP9 or AV1. H.264 streams are smooth;
-1080p HEVC will stutter no matter how you configure mpv. Prefer H.264
-sources, and set your Jellyfin library to transcode to H.264 for this
-client. Output tops out at 1080p — there is no 4K path here.
-
-**1 GB of RAM, shared with the GPU.** This is why Chromium runs with a
-64 MB JS heap and one renderer, why Feishin (Electron) is gone, and why
-mpv's demuxer buffers are shrunk in `start-session.sh`. It works, but
-there is no headroom for a second heavy app. `theme.json`'s `pi3` profile
-is what keeps this machine viable — fewer posters in flight, less motion,
-a narrower grid.
+Run `./system/install.sh --check` on either one; it detects `dnf` or
+`apt`, uses that distro's package names, and audits everything that
+actually goes wrong.
 
 ## How it works
 
@@ -118,7 +140,7 @@ launcher/index.html          markup + stylesheet (no literal values)
 launcher/app.js              every screen, the dot-matrix engine, input
 launcher/theme.js            loads theme.json onto :root as CSS variables
 launcher/theme.json          THE ONE FILE — colour, type, spacing, motion,
-                             layout, copy, and the pi3 hardware profile
+                             layout, copy, and the `lite` hardware profile
 server/server.py             backend: static UI, mpv bridge, endpoints
 server/stremio.py            Cinemeta catalogue + Torrentio streams
 server/tmdb.py               optional: credits and reviews (needs a key)
@@ -147,11 +169,12 @@ system/99-htpc-input.rules   uinput + CEC device permissions
 
 ## The short way
 
-Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager. In
-Imager's customisation screen set the hostname, your user, wifi and your
-SSH key — that covers everything an install script should not be doing.
+Install a minimal x86_64 Linux with no desktop environment — Fedora
+Server / Everything-minimal, or Debian with no tasksel desktop. The box
+boots straight into the launcher, so a display manager is something to
+avoid rather than configure.
 
-Then, over SSH:
+Then:
 
 ```bash
 git clone https://github.com/peeetar/nothing-htpc ~/nothing-htpc
@@ -161,8 +184,9 @@ sudo reboot
 ```
 
 That installs packages, writes the systemd unit with *your* username, uid
-and *this clone's path*, sets up CEC and uinput permissions, enables
-`vc4-kms-v3d`, and moves the journal to RAM.
+and *this clone's path*, sets up CEC and uinput permissions, and moves the
+journal to RAM. (On a Raspberry Pi it also enables `vc4-kms-v3d`; it
+detects that from the boot config and does nothing on x86.)
 
 **The box runs the clone, in place.** Nothing is copied to `/opt` or
 anywhere else — the service is pointed at wherever you put the repo, and
@@ -265,8 +289,10 @@ You should land on the dot-matrix clock.
 
 # HDMI-CEC
 
-This is the part the Pi does better than the tower it replaced: no
-adapter, and the TV remote becomes the primary controller.
+Where there is a CEC line, the TV remote becomes the primary controller.
+On x86 that means a Pulse-Eight USB adapter — desktop and laptop GPUs
+have no CEC pin on HDMI. Without one, `cecd.py` exits quietly and nothing
+else changes; the keyboard drives everything.
 
 Check it works:
 
@@ -285,41 +311,104 @@ It is off by default on many sets.
 uinput device, so they arrive at whatever is on screen as ordinary key
 presses. Nothing in the launcher or in mpv knows CEC exists:
 
-| TV remote | Home | Poster grid | Live TV |
-|---|---|---|---|
-| ◀ ▶ | move between tiles | move the cursor | — |
-| ▲ ▼ | — | move a row, and page past the last one | change channel |
-| OK | open | open the detail panel, then play | re-show the bar |
-| Back | — | close the panel, then go back | stop and go back |
-| Exit / Menu | — | return home (via `POST /home`) | return home |
-| Ch +/− | — | — | change channel |
-| 0–9 | — | — | tune directly |
+| TV remote | Home | Poster grid | Detail panel | Live TV |
+|---|---|---|---|---|
+| ◀ ▶ | move between tiles | move the cursor | change season (shows) | — |
+| ▲ ▼ | — | move a row, and page past the last one | change episode (shows) | change channel |
+| OK | open (or launch, on GAMING) | open the detail panel | play (the episode, on a show) | open the channel list, then tune |
+| Back | — | go back | close the panel | close the list, then stop and go back |
+| Exit / Menu | — | return home (via `POST /home`) | return home | return home |
+| Ch +/− | — | — | — | change channel |
+| 0–9 | — | — | — | tune directly |
 
-One set of intents, routed by whichever screen is up — the gamepad, a
-keyboard and the TV remote all arrive at the same four handlers.
+A film's detail panel has nothing to move through — its reviews scroll
+themselves — so ◀ ▶ ▲ ▼ do nothing there on purpose.
 
 Volume is deliberately absent: it is the TV's job, over its own remote.
 
-**Power follow.** At startup the Pi wakes the TV and claims the input.
+**Power follow.** At startup the box wakes the TV and claims the input.
 When the TV goes to standby the daemon returns to the launcher, which
 kills whatever was streaming — no point pulling an IPTV stream at a dark
-screen. The Pi itself stays up; it has no suspend to enter.
+screen. The box itself stays up; there is no suspend here.
 
 If `/dev/uinput` is not writable the daemon logs it and carries on doing
 power follow only, so a permissions slip costs you the remote, not the box.
+
+## The keyboard
+
+**Gamepad testing is deferred, so the keyboard is the primary input.**
+Every function on every screen has a key; nothing is reachable only by
+controller. This is the whole map:
+
+| Key | Does |
+|---|---|
+| `←` `→` `↑` `↓` | navigate — and `A` `D` `W` `S` do the same |
+| `PageUp` / `PageDown` | up / down (what a TV remote's Ch +/− arrives as) |
+| `Enter` or `Space` | OK — open, play, tune, launch, play/pause |
+| `Esc` or `Backspace` | back, one layer at a time |
+| `H` or `Home` | return to the launcher — kills a running app and stops the player |
+| `O` or `F3` | open the **stream picker** on a film or episode |
+| `0`–`9` | tune a channel directly, on TV |
+
+Three things worth knowing:
+
+- **Back peels one layer at a time.** On the poster grid that is: picker
+  → detail panel → grid → home. Collapsing two at once is how a press
+  meant for the picker also stops the film behind it.
+- **`H` takes the same route as the gamepad and the TV remote** — all
+  three `POST /home`, rather than three near-copies of the same idea.
+- **The picker has its own key rather than sharing `Enter`.** `Enter`
+  already means "play this" on a detail panel, and the picker is what you
+  reach for when that did not work.
+
+Internally there is one set of intents — `onNav`, `onOk`, `onBack`,
+`onDigit`, `onHome`, `onSources` — routed by whichever screen is up. The
+keyboard, the gamepad and the TV remote all arrive at those six handlers,
+and no screen has a key listener of its own.
 
 ---
 
 # Screens
 
-None of these is an app. Every one is a screen in the launcher page, so
-opening one starts no process and shows no black frame.
+All but one of these is a screen in the launcher page, so opening it
+starts no process and shows no black frame. GAMING is the exception and
+has to be — a game needs the display.
 
 ## TV
 
 Live channels from `cabletv/channels.m3u`, tuned by number — the only
-place numbers still exist. Free IPTV lists come from
-[iptv-org](https://github.com/iptv-org/iptv); prefer H.264.
+place numbers still exist.
+
+**The lineup was rebuilt on 13 August 2026 to be geo-free**: 53 channels,
+every one of them probed from this machine, answering with a playlist,
+a variant *and* a segment. That last check is the one that matters — a
+master playlist over a dead origin returns 200 and shows black, which is
+indistinguishable from a broken box at the sofa.
+
+| Range | What |
+|---|---|
+| 1–29 | Macedonia — Sitel, Kanal 5, TV21, Nasha TV and the nasatv.com.mk music bouquet |
+| 30–39 | Greece — ERT News, ANT1, Alpha, Skai, Star |
+| 40–49 | World news — BBC News, CNN, Al Jazeera English, France 24, DW, Euronews, Sky News, Bloomberg |
+| 50–59 | Music — MTV, MTV 2, MTV Classic, MTV Biggest Pop, Vevo, Trace |
+| 60–89 | Cartoons and kids — the Nickelodeon bouquet, the Disney trio, and a set of free FAST channels |
+
+**Four requested channels are not there, and the file says why on the
+line where each one would be.** MRT 1 and Telma have no working public
+source of any kind right now — the CDN that carried half the Macedonian
+dial (`vipottbpkstream.vip.hr`) simply refuses connections, and the URLs
+still in circulation for MRT 1 carry a 30-minute signed token. ERT1/2/3
+are genuinely geo-fenced to Greece (their CDN answers 401 "Content
+blocked by security policy"; ERT News on the same CDN is open, which is
+how you can tell it is policy and not breakage). Cartoon Network,
+Boomerang and Adult Swim have no free feed anywhere — Warner keeps them
+behind a TV-provider login.
+
+Those entries keep their numbers with the URL commented out, so the dial
+keeps its shape and each is one uncommented line away from coming back.
+`server/channels.py` skips an `#EXTINF` whose URL is commented, so a
+reserved number never shows up as a black channel. Adding sources is
+exactly this: paste an m3u in chat, or put a URL on the line.
 
 Zapping does not wait for streams: the number and the bar change on the
 keypress, and the stream is not opened until the number has sat still for
@@ -328,6 +417,19 @@ channel. Three digits tune instantly, fewer after a two-second pause.
 
 A dead channel shows black and a three-dot indicator, and `shim.lua`
 retries it every 12 s. There is no static any more.
+
+**The channel list.** Ⓐ slides the dial in from the left, over the
+picture — which keeps playing behind it, because the launcher is one
+transparent page and never has to replace the video to draw a menu. ▲ ▼
+moves the cursor, Ⓐ tunes, Ⓑ puts it away without changing channel. Nine
+rows are drawn at a time (`channel-list-rows`) and the window moves with
+the cursor, so a hundred-channel m3u costs the same to draw as a
+ten-channel one.
+
+The red dot marks the channel that is **on**; the white glow marks the
+one the cursor is **over**. They are usually different rows, which is the
+whole reason the design language spends its one accent on state and never
+on focus.
 
 ## Movies and Shows
 
@@ -342,13 +444,71 @@ which needs an account:
 
 A page is five rows; the viewport shows the two that fit and scrolls, and
 running off the bottom turns the page. Ⓐ opens a detail panel — year,
-runtime, rating, synopsis, credits, and user reviews with star ratings —
-and Ⓐ again plays.
+runtime, rating, synopsis and credits — and Ⓐ again plays.
 
-Stream choice is filtered to what the box can actually decode: H.264,
-1080p max, no HEVC/VP9/AV1 on the Pi. That is a correctness rule, not a
-preference — a 2160p AV1 remux is a slideshow on a 3B+. Raise it with
-`HTPC_MAX_HEIGHT` and `HTPC_ALLOW_HEVC=1` on better hardware.
+**The bottom of the panel differs by kind**, because a film and a show
+want different things there.
+
+*A film* gets user reviews with star ratings, one at a time, held and
+then cross-faded. A review longer than the panel **scrolls itself**: it
+holds at the top long enough to start reading, crawls up at
+`review-scroll-px-per-s`, holds at the bottom, and only then moves on to
+the next one. It used to clip at the fourth line and fade the rest out,
+which loses the end of every review worth reading.
+
+*A show* gets its own dial instead: a **season tab strip** (◀ ▶) and the
+**episodes of the open season** beneath it (▲ ▼), with names where
+Cinemeta has them and `EPISODE n` where it does not. Specials — anything
+Cinemeta files under season 0 — are kept but sort last. Ⓐ plays the
+episode the cursor is on, not the show: every episode already carries the
+id the stream addons index it by (`tt11198330:1:3`), so choosing one
+costs no extra lookup. Seven rows are drawn at a time
+(`detail-episode-rows`) and the window moves with the cursor, so a show
+with 700 episodes draws as cheaply as one with eight.
+
+### The source picker
+
+**A torrent is not a channel.** The copy the ranking picked can simply
+not be there, and the only useful answer to that is the next copy — so a
+failed play does not end at a message. It shows the backend's actual
+sentence *and* opens a picker underneath it listing every other copy of
+that film or episode. `O` (or `F3`) opens it deliberately at any time.
+
+Each row is one stream: its quality as a dot-matrix tag, the indexer it
+came from, its size, and its seeder count. `DIRECT` marks a debrid link,
+which plays immediately; everything else is a torrent that has to find
+peers first, and that is worth knowing before you press Ⓐ rather than
+after. `HEAVY` marks a stream outside the playback envelope.
+
+Eight rows are drawn at a time (`source-list-rows`), the window moves
+with the cursor, and a popular film comes back with ninety copies — so
+this is the same windowing the channel list and the episode chooser use,
+for the same reason. Red marks the source that is playing, the glow
+marks the row the cursor is over.
+
+The page never handles an infoHash or a magnet. `GET /streams/<kind>/<id>`
+returns the ranked list with a row index each, and `POST /play` takes
+that index back, which keeps resolving — and TorrServer — entirely on the
+backend's side.
+
+### What gets picked first
+
+**The playback envelope is a preference now, not a correctness rule.**
+Both x86 targets decode HEVC, VP9 and AV1 in hardware, so 2160p and every
+modern codec are allowed by default. This is the reverse of the Pi rule
+it replaced: `HTPC_MAX_HEIGHT` and `HTPC_ALLOW_HEVC=0` now **tighten**
+the envelope for weak hardware.
+
+Nothing is ever dropped for being outside it — it sorts last and the
+picker flags it `HEAVY`, because if every copy of a film is a 4K remux
+then playing one badly beats "no streams found".
+
+Ranking is: inside the envelope, then seeder bucket, then resolution,
+then raw seeders. The bucketing is the load-bearing part. Ranking on the
+raw count lets 2,140 seeders beat 2,100 and decide a resolution jump —
+a difference nobody can perceive deciding one everybody can — while
+still letting 1,200 beat 6, which is the difference between a film that
+plays and one that does not.
 
 **Stream addons are a list, not a constant.** `torrentio.strem.io` — the
 address every guide still gives — stopped resolving entirely by July 2026
@@ -362,13 +522,16 @@ Optional — everything except MOVIES and SHOWS works without it. One
 static Go binary, no Node, no `peerflix`:
 
 ```bash
-curl -L -o /usr/local/bin/torrserver \
-  https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-arm7
-chmod +x /usr/local/bin/torrserver
-torrserver --port 8090 --path ~/.cache/torrserver &
+# x86_64 — no root needed
+curl -L -o ~/.local/bin/torrserver \
+  https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-amd64
+chmod +x ~/.local/bin/torrserver
+torrserver --port 8090 --path ~/.local/share/torrserver &
 ```
 
-Point elsewhere with `TORRSERVER_URL`.
+Point elsewhere with `TORRSERVER_URL`. `curl 127.0.0.1:8090/echo` answers
+with its version when it is up, which is the quickest way to tell a dead
+TorrServer from a title with no streams.
 
 **The cheapest upgrade available is a debrid account.** With a key in
 `TORRENTIO_OPTS` (e.g. `realdebrid=XXXX`), Torrentio returns direct HTTPS
@@ -390,6 +553,10 @@ Free at [themoviedb.org](https://www.themoviedb.org/settings/api). It
 does not expire and there is no OAuth flow, which is why it is an
 acceptable exception on a box with no keyboard. Without it the panel
 simply shows the keyless set and the reviews block does not render.
+
+Reviews are fetched for films only — a show spends that half of the
+panel on its episodes, so asking TMDB about it would be a round trip for
+something never drawn.
 
 ## News
 
@@ -473,15 +640,72 @@ If `playerctl` is missing or spotifyd has no MPRIS, the music screen says
 so plainly and the launcher stops polling rather than spawning a
 `playerctl` every few seconds for nothing.
 
-Navidrome is not wired up. The old Feishin plan is gone — Electron will
-not run in 1 GB — and nothing has replaced it; if you want the NAS music
-library on the TV, that is still an open decision.
+Navidrome is not wired up. The old Feishin plan died with the 1 GB
+budget and nothing has replaced it; if you want the NAS music library on
+the TV, that is still an open decision. (An Electron tile is now
+*possible* on x86 — it is just still a bad idea in a kiosk with no
+window manager.)
+
+## Gaming
+
+**Steam Big Picture inside gamescope**, and the only tile that starts a
+process. It came back on 13 August 2026, having been cut in July when the
+box was a Pi.
+
+```bash
+# Fedora — Steam needs RPM Fusion nonfree
+sudo dnf install gamescope steam
+# Debian
+sudo apt install gamescope steam
+# or the Flatpak, which system/gamescope-session.sh also finds
+flatpak install flathub com.valvesoftware.Steam
+```
+
+Neither is installed by `install.sh`. If one is missing the tile says
+which and how to install it — on the TV as a toast, and in the journal
+tagged `[gaming]`.
+
+**If you keep a `server/config.local.json`, the GAMING entry has to be in
+it.** That file wins over `config.json` key by key, so an empty `apps`
+there hides every tile that launches a process. The entry is three lines:
+
+```json
+"apps": [
+  { "id": "gaming", "label": "GAMING",
+    "command": ["${HTPC_DIR}/system/gamescope-session.sh"] }
+]
+```
+
+**Why gamescope and not bare Steam.** The session is a cage kiosk with no
+window manager, so bare Steam gets no fullscreen, no resolution control
+and no controller focus handling. gamescope is a nested compositor that
+provides all three, and it is what the Steam Deck runs.
+
+Tuning is environment, not config, because it belongs to the display
+rather than to the box:
+
+| Variable | Default | For |
+|---|---|---|
+| `HTPC_GAME_RES` | `1920x1080` | gamescope's *output* size |
+| `HTPC_GAME_REFRESH` | `60` | output refresh |
+| `HTPC_GAMESCOPE_ARGS` | — | anything else: `--hdr-enabled`, `--adaptive-sync`, `-F fsr` |
+
+Launching stops mpv first — otherwise a channel keeps its audio going
+underneath a game whose picture has covered it. Exit / Menu (or `H`)
+returns to the launcher and kills the session.
+
+**This is the one thing that cannot be finished on the laptop.**
+gamescope nested inside a nested cage is not a sensible thing to run. The
+launch path, the binary probing and the failure reporting are all tested
+here; a game actually rendering waits for the AMD box.
 
 ---
 
 # Testing without a TV
 
-You do not need the Pi, a spare screen, or a VM to work on this.
+You do not need the box, a spare screen, or a VM to work on this — and
+since 13 August 2026 the laptop is the *acceptance* machine, not just a
+convenience.
 
 ```bash
 ./system/dev-session.sh          # real config
@@ -519,10 +743,11 @@ server | 21:04:20 [play] movie tt0816692 -> Torrentio 1080p x264 👤 2081
 
 **A tile that opens and closes again is this, every time.** The backend
 relays a launched process's output line by line, tagged with the tile id,
-and logs how and when it died — on the Pi that lands in
+and logs how and when it died — under the service that lands in
 `journalctl -u htpc-session` too. `/status` carries a `last_exit` field
-with the id, exit code and how long it ran. (With the tile list empty
-this matters less than it did, but the machinery is still there for
+with the id, exit code and how long it ran, and the launcher reads it for
+~3 s after a launch so an early death reaches the TV as well as the log.
+This is exactly how a missing gamescope presents. (The machinery is there for
 whatever gets added next.)
 
 `HTPC_DEBUG=1` turns on the tagging, the HTTP access log and Chromium's
@@ -540,20 +765,27 @@ On Debian/Ubuntu: `sudo apt install cage chromium mpv foot`.
 
 `--vm` points the backend at `server/config.vm.json` through the
 `HTPC_CONFIG` environment variable, so it never overwrites a deployed
-`config.json`. If cage or chromium are missing the script falls back to
-running just the backend, and you open `http://127.0.0.1:8484` in any
-browser — everything except the kiosk shell works there.
+`config.json`.
+
+If cage or chromium are missing the script falls back to **backend-only**:
+it starts the idle mpv and the backend, and you open
+`http://127.0.0.1:8484` in any browser. Video plays in mpv's own window
+rather than under the page. That is a real prototype of everything except
+the one thing the kiosk exists to prove — the page compositing *over* the
+video instead of beside it — and it is enough to develop every screen on
+a laptop. (Backend-only used to skip mpv too, which made TV and MOVIES
+resolve a stream, hand it to nothing, and report NO SIGNAL.)
 
 ### The test suite
 
-Everything checkable without a Pi, a TV or a CEC line:
+Everything checkable without a TV, a CEC line or a graphics card:
 
 ```bash
 test/run-all.sh
 ```
 
-That is syntax for every language in the repo, 36 backend tests
-(`python3 -m unittest discover -s test`), and 56 UI render tests that
+That is syntax for every language in the repo, 54 backend tests
+(`python3 -m unittest discover -s test`), and 97 UI render tests that
 load the real launcher in headless Chromium and assert what each screen
 drew — which is the only way to catch the failure mode that matters here,
 where a JS exception during boot leaves a black screen that looks exactly
@@ -565,32 +797,70 @@ test/test_ui.sh --shots /tmp/shots     # also writes a PNG per screen
 
 The UI tests use `?fixtures=1`, a developer flag that stands in for the
 HTTP calls a laptop cannot make. It never fakes a launch or a stream.
-`?view=`, `?sel=` and `?detail=1` navigate to a screen without a gamepad.
+`?view=`, `?sel=`, `?detail=1`, `?list=1` (the channel list) and
+`?sources=1` (the stream picker) navigate to a screen without a gamepad.
 
 It also fails the build if a hex colour or an English string appears in
 `app.js` — those belong in `theme.json`, and a value that is not in the
 theme is a value a reskin cannot reach.
 
-**What it cannot cover, and never claims to:** HDMI-CEC, V4L2 hardware
-decode, thermal throttling, power delivery, and the transparent-Chromium-
-over-mpv layering. Do not "fix" any of those based on what it says.
-
-Backend smoke test:
+Backend smoke test — including the picker, against real Torrentio:
 
 ```bash
 python3 server/server.py &
 curl localhost:8484/config
-curl -X POST localhost:8484/launch/tv
+curl localhost:8484/channels                     # 53 channels
+curl localhost:8484/streams/movie/tt15239678     # every copy, ranked
+curl -X POST localhost:8484/play \
+  -H 'content-type: application/json' \
+  -d '{"kind":"movie","id":"tt15239678","index":2}'   # play the third one
+curl -X POST localhost:8484/launch/gaming
 curl -X POST localhost:8484/home
 ```
 
-**What cannot be tested off the Pi:** HDMI-CEC (needs the real line and a
-real TV), hardware video decode, and thermal behaviour. Do not "fix"
-those based on what a desktop does.
+**What still cannot be tested here, and never claims to be:** HDMI-CEC
+(needs a real line and a real TV), hardware video decode on the AMD box,
+a game actually rendering, and the transparent-Chromium-over-mpv layering
+*on the production box*. Do not "fix" any of those from what a laptop
+does.
 
 ---
 
 # Troubleshooting (field notes)
+
+**The session ends a second after it starts, with status 127.** Chromium
+exiting *is* the end of the session, so a missing browser looks like the
+box refusing to boot. `start-session.sh` probes `chromium`,
+`chromium-browser`, `chromium-freeworld` and `google-chrome` in that
+order — Debian and Raspberry Pi OS ship the first name, Fedora the
+second. If it finds none it says so and exits 127 rather than letting the
+shell's "command not found" be the only clue.
+
+**The UI is there but a channel plays no picture, on a dev machine.**
+Look for `vo_x11_init: Assertion !vo->x11 failed` in the log. mpv's
+default `gpu-next` wants Vulkan; inside a nested, software-rendered cage
+it gets `VK_ERROR_SURFACE_LOST_KHR`, walks its fallback chain to X11 and
+dies on an assertion — and it does that on the *first file*, not at
+startup, so it reads as a broken stream rather than a broken video
+output. `dev-session.sh` sets `HTPC_MPV_VO_ARGS` to
+`--vo=gpu --gpu-api=opengl --gpu-context=wayland --hwdec=no` whenever it
+nests, which is the one combination that both idles and plays there.
+(`wlshm` does not: it cannot even hold an idle window.) The Pi never sets
+this — there mpv picks KMS/GL by itself and gets hardware decode with it.
+
+**Everything says "player is not running" after a session was killed.**
+mpv's socket file outlives mpv and is only cleared by the next
+`start-session.sh` on the way up. That is handled: a socket that exists
+but refuses a connection reports exactly what no socket reports, and
+`/player/state` says unavailable rather than claiming a player that is
+not there. If you see this, mpv really is not running — check the top of
+the log for why.
+
+**`ModuleNotFoundError: evdev`.** Optional, and only the gamepad's home
+button and the CEC remote want it. Both daemons now say one line and get
+out of the way instead of dumping a traceback into the session log.
+`sudo dnf install python3-evdev` (or `sudo apt install python3-evdev`)
+if you want the 8BitDo's guide button.
 
 **Flickering screen / boot loop.** The session is crash-restarting every
 2 s. SSH in, or switch to another terminal (**Ctrl+Alt+F2**), and:
@@ -684,24 +954,35 @@ built image, is the open question in [PACKAGING.md](PACKAGING.md).
 
 ---
 
-# Appendix: the x86 tower build
+# Appendix: the Raspberry Pi build (retired)
 
-The original target was a Ryzen + Vega 56 box running Debian 13. It still
-works, with three differences:
+Kept because the code still runs there and somebody may want to know why
+half the design looks the way it does.
 
-1. **CEC needs a Pulse-Eight USB adapter** — desktop GPUs have no CEC pin
-   on HDMI. `cec-tv.sh` and `cecd.py` talk to the kernel CEC API, which
-   the Pulse-Eight adapter also exposes as `/dev/cec0`, so both should
-   work against it unchanged — but this is untested since the move.
-2. **Suspend/wake exists**, unlike on the Pi. The old setup suspended the
-   PC and woke it from the 8BitDo dongle; the udev rule for that is kept,
-   commented out, at the bottom of `system/99-htpc-input.rules`.
-3. **GAMING** was a tile here (`steam -gamepadui`, optionally under
-   gamescope). It is gone from the launcher and the config. The tile model
-   is deliberately kept general enough to take it back: add an entry to
-   `apps` in the config, an icon and a `TILES` row in `launcher/app.js`.
+The box was a **Raspberry Pi 3B+** from July 2026 to 13 August 2026, and
+three of its properties shaped everything:
 
-The x86 build is also where the remodel is most comfortable. Drop the
-`pi3` profile, raise `HTPC_MAX_HEIGHT`, set `HTPC_ALLOW_HEVC=1`, and the
-whole playback envelope in CLAUDE.md constraint 11 relaxes — those limits
-are a 3B+ fact, not a design position.
+1. **1 GB of RAM shared with the GPU.** This is why Chromium runs one
+   renderer with a 64 MB JS heap, why mpv's demuxer buffers are shrunk in
+   `start-session.sh`, why no Electron app was ever a tile, and why every
+   long list in the UI is windowed rather than scrolled. All of those are
+   kept — they turned out to be good design independent of the budget.
+2. **H.264 only, 1080p max.** No hardware decode for HEVC, VP9 or AV1, so
+   the stream ranking treated the envelope as a correctness rule. That is
+   the one thing which fully inverted; see
+   [What gets picked first](#what-gets-picked-first).
+3. **A real CEC line on the HDMI connector**, which is the only reason a
+   Pi made sense here at all. x86 needs a Pulse-Eight USB adapter, which
+   also exposes `/dev/cec0`, so `cec-tv.sh` and `cecd.py` should work
+   against it unchanged — untested.
+
+To run this on a Pi again: `sudo ./system/install.sh` still writes
+`dtoverlay=vc4-kms-v3d` into `/boot/firmware/config.txt` when it finds a
+Pi boot config (mandatory — without it cage has no DRM device and there
+is no `/dev/cec0`), then set `?profile=lite`, `HTPC_MAX_HEIGHT=1080` and
+`HTPC_ALLOW_HEVC=0`. GAMING will report that gamescope is missing and
+stay a dead tile, which is the correct outcome.
+
+Before the Pi it was a Ryzen + Vega 56 tower on Debian 13. Its
+suspend/wake udev rule is still there, commented out, at the bottom of
+`system/99-htpc-input.rules`.

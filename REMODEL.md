@@ -201,17 +201,90 @@ channel, browses a poster grid and draws the weather.
   single ΘΕΣΣΑΛΟΝΙΚΗ row, (b) derive a category from each item's URL slug,
   which is guesswork, or (c) find a categorised Thessaloniki source. Not
   blocking — the layout works either way, the bottom half just has one row
-  instead of several.
-- **Hardware.** Pi 3B+ for now. If a box gets bought, the OptiPlex 3050
-  (7th-gen, HD 630 — hardware VP9 and HEVC Main10) beats the 7040 (6th-gen,
-  HD 530) for a difference that is not worth saving. If gaming via gamescope
-  is genuinely coming, neither Mini competes with the Ryzen 7 / Vega 56 tower
-  that already exists.
+  instead of several. **Still open.**
+- ~~**Hardware.**~~ **Settled, 13 August 2026** — see the retarget below.
+- **MRT 1 and Telma have no source.** Both were probed exhaustively on
+  13 August 2026 and neither has a working public URL. This is the one part of
+  the August work that did not land, and it is an availability problem rather
+  than a code one. Options: re-probe from the box's own connection, find a
+  Macedonian aggregator that is not iptv-org, or accept the dial without them.
+- **PACKAGING.md is stale.** It decided "script now, pi-gen image later, never
+  Yocto" for a Raspberry Pi. The target is x86 now, so the image half of that
+  decision needs rewriting. The script half (`install.sh`) is still right and
+  now speaks both `dnf` and `apt`.
+
+---
+
+# The August 2026 retarget
+
+**13 August 2026.** The Raspberry Pi 3B+ is dropped. Development and
+acceptance move to a Fedora x86_64 Lenovo laptop (Ryzen 7 PRO 5850U,
+integrated Radeon); production becomes an AMD-GPU HTPC. Both run `amdgpu` and
+the same VA-API decode path, which is why the laptop can be an acceptance
+machine and not just a convenience.
+
+## What inverted
+
+Three rules existed only because of the Pi, and all three flipped:
+
+1. **The playback envelope.** Was a correctness rule — H.264, 1080p, enforced
+   in `stremio.py`'s ranking, because a 2160p AV1 remux is a slideshow on a
+   3B+. Now a preference: everything is allowed by default, `HTPC_MAX_HEIGHT`
+   and `HTPC_ALLOW_HEVC` *tighten* rather than loosen, and nothing is ever
+   dropped for being outside — it sorts last and is flagged `HEAVY`.
+
+   The ranking gained a seeder **bucket**. Ranking on the raw count let 2,140
+   seeders beat 2,100 and decide a resolution jump; bucketing means seeders
+   decide only across an order of magnitude, and resolution decides inside a
+   bucket. A 4K copy with six seeders still loses to a 1080p with 1,200,
+   because "does not play" beats every resolution argument there is.
+2. **The `pi3` theme profile** became `lite` — a generic low-power fallback.
+   The mechanism was worth keeping; the name was a description of a board
+   nobody still owns.
+3. **The GAMING tile came back.** It was cut in July with the note "the tile
+   model is kept general enough to take it back via gamescope later — design
+   for it, don't build it". That turned out to be exactly right: taking it
+   back was a `TILES` row with `app:` instead of `view:`, an icon, a config
+   entry and `system/gamescope-session.sh`.
+
+## What was built alongside it
+
+- **The stream picker.** A failed `/play` no longer ends at a message; it
+  opens a list of every other copy of that title. `GET /streams/<kind>/<id>`
+  returns the ranked list with a row index each, `POST /play` takes the index
+  back, and the page never touches an infoHash. Built as the channel list's
+  twin — same windowing, same two markers — because it is the same problem.
+- **Keyboard-first input.** Gamepad testing is deferred, so every function has
+  a key: navigation, OK, back, digits, `H` for home, `O` for the picker. Two
+  new intents (`onHome`, `onSources`) joined the existing routing rather than
+  adding listeners.
+- **The channel lineup, rebuilt geo-free.** 53 channels, each verified down to
+  a real segment. See cabletv/README.md.
+- **`install.sh` speaks `dnf` and `apt`.** It was apt-only, which meant it
+  reported every package missing on the development machine.
+
+## Status
+
+Green on the laptop: 54 backend tests, 97 UI render tests, syntax and theme
+coverage. The `/streams` endpoint was exercised against live Torrentio (91
+streams for one title, correctly ranked) and the GAMING tile against a machine
+with no gamescope, which reported the missing binary on the TV and in the
+journal — the designed behaviour.
+
+Still unproven, and honestly so:
+
+- a game actually rendering (nested gamescope is not a sensible test)
+- HDMI-CEC (no CEC line on a laptop)
+- the layering and decode path **on the AMD box specifically**
+- the gamepad, deliberately deferred
 
 ## Status
 
 **Merged to main on 30 July 2026.** Built and green on a dev machine;
-**nothing has run on the Pi yet.** The last commit of the old design is tagged
+**nothing ever ran on the Pi** — the hardware was dropped two weeks later
+without the remodel having booted on it once. See
+[the August retarget](#the-august-2026-retarget) below, which supersedes the
+hardware half of everything above. The last commit of the old design is tagged
 `pre-remodel` — `git checkout pre-remodel` is the whole rollback.
 
 Done:

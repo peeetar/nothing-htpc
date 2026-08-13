@@ -24,8 +24,8 @@ screens in the launcher, not pages you tune to, so 990–999 is no longer
 reserved for teletext and is simply free.
 
 ```
-#EXTINF:-1 tvg-chno="101",MRT 1
-http://example.com/mrt1.m3u8
+#EXTINF:-1 tvg-chno="3",Sitel
+https://teve.mk/tvstanici/s1/playlist.m3u8
 ```
 
 `tvg-chno` is a fixed identity chosen by the owner. **Never renumber an
@@ -36,10 +36,116 @@ dots, not static.
 An entry with no `tvg-chno` is skipped rather than auto-numbered: a channel
 with no identity would move every time the file was edited.
 
-Parsed by `server/channels.py`, served to the launcher at `GET /channels`.
+Parsed by `server/channels.py`, served to the launcher at `GET /channels`, and
+browsed on the TV screen through the **channel list** — Ⓐ slides it in over the
+picture, ▲ ▼ moves, Ⓐ tunes, Ⓑ dismisses. The list draws
+`channel-list-rows` rows at a time and windows the rest, so the length of this
+file is not a cost to the UI. Order on screen is this file sorted by number,
+which is the only ordering that exists.
 
-Prefer H.264. The Pi 3B+ has no HEVC, VP9 or AV1 hardware decoder and 1080p is
-the ceiling (CLAUDE.md constraint 11). On x86 that relaxes.
+Codec no longer matters here. The Pi's H.264-only ceiling is gone (13 August
+2026) — both x86 targets decode everything in hardware, so a 1080p HEVC
+channel is as good as an H.264 one.
+
+## The lineup, rebuilt 13 August 2026
+
+**53 channels, every one probed and working**, in five blocks:
+
+| Range | What |
+|---|---|
+| 1–29 | Macedonia |
+| 30–39 | Greece |
+| 40–49 | World news |
+| 50–59 | Music |
+| 60–89 | Cartoons and kids |
+
+The goal was **geo-free**: everything here answers from an ordinary European
+connection with no VPN, no user-agent games and no referrer header. Streams
+that only worked with a browser user-agent were rejected rather than worked
+around — mpv would need the header carried through this file, and the channel
+would break again the next time the operator tightened it.
+
+### What "working" means here
+
+A URL counts only if the playlist parses, **a variant under it answers, and a
+segment under that answers**. That last hop is the whole point: a master
+playlist over a dead origin returns 200 and shows black, which is
+indistinguishable from a broken box at the sofa. Checking only the top level
+is how a channel list full of dead channels looks healthy.
+
+### Dead entries keep their number and lose their URL
+
+A number is an identity: deleting channel 9 today and re-adding it in
+September would land it somewhere else. So an entry with no working source
+keeps its `#EXTINF` line and has its URL commented out, with a note saying
+what was tried.
+
+`server/channels.py` skips an `#EXTINF` whose URL is commented, so a reserved
+number costs nothing and **never shows up as a black channel**. Putting one
+back is uncommenting a line, or pasting a new URL under it.
+
+Four requested channels are in that state:
+
+- **MRT 1** and **Telma** — no working public source of any kind. The CDN that
+  carried half the Macedonian dial (`vipottbpkstream.vip.hr`) now refuses
+  connections outright, `teve.mk`'s `s1`/`s2` subdomains went with it, and the
+  MRT 1 URLs still in circulation carry a 30-minute signed token. Telma is not
+  in iptv-org at all and its own site exposes no playlist URL to a plain GET.
+- **ERT1 / ERT2 / ERT3** — genuinely geo-fenced to Greece. Their CDN 307s to
+  `msvdn.net`, which answers 401 "Content blocked by security policy". ERT
+  News on the same CDN is open, which is how you can tell it is policy and not
+  breakage.
+- **Cartoon Network / Boomerang / Adult Swim** — no free feed exists anywhere.
+  Warner keeps them behind a TV-provider login.
+
+This is constraint 18 in the ordinary course of business — these are public
+endpoints, they are weather, and a dead one costs a comment rather than a
+rebuild.
+
+### To re-probe
+
+Checks all three levels, the way the lineup was built:
+
+```bash
+python3 - <<'PY'
+import concurrent.futures as cf, sys, urllib.parse, urllib.request
+sys.path.insert(0, "server"); import channels
+
+def get(url, n=200_000):
+    req = urllib.request.Request(url, headers={"user-agent": "libmpv"})
+    with urllib.request.urlopen(req, timeout=12) as r:
+        return r.read(n), r.geturl()
+
+def first(body, base):
+    for line in body.decode("utf-8", "replace").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return urllib.parse.urljoin(base, line)
+
+def probe(c):
+    try:
+        body, final = get(c["url"])
+        if not body.lstrip().startswith(b"#EXTM3U"):
+            return c, "not a playlist"
+        child = first(body, final)
+        if not child:
+            return c, "empty playlist"
+        cbody, cfinal = get(child, 64_000)
+        if cbody.lstrip().startswith(b"#EXTM3U"):      # master -> variant
+            g = first(cbody, cfinal)
+            if not g:
+                return c, "empty variant"
+            cbody, _ = get(g, 32_000)
+        return c, "live" if len(cbody) >= 512 else "empty segment"
+    except Exception as e:
+        return c, "%s: %s" % (type(e).__name__, str(e)[:40])
+
+rows = channels.load()
+with cf.ThreadPoolExecutor(max_workers=12) as ex:
+    for c, why in sorted(ex.map(probe, rows), key=lambda r: r[0]["no"]):
+        print("%4d %-24s %s" % (c["no"], c["name"][:24], why))
+PY
+```
 
 ## shim.lua
 
@@ -60,8 +166,7 @@ side of a socket, because mpv knows them first:
   returns it in the same round trip as position and cache state
 
 The UI could poll for all of it, but discovering four seconds late that a
-channel died is worse than being told, and every poll on a 1 GB Pi is real
-work.
+channel died is worse than being told.
 
 Handlers are wrapped in `guard()` (a `pcall`). There are no format strings
 left in here — the bug that once froze the whole box was a `:format()`

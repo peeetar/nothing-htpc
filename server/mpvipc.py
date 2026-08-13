@@ -58,7 +58,17 @@ def command(*args, timeout=TIMEOUT):
         try:
             s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             s.settimeout(timeout)
-            s.connect(SOCKET_PATH)
+            try:
+                s.connect(SOCKET_PATH)
+            except (ConnectionRefusedError, FileNotFoundError) as e:
+                # The socket FILE outlives the process that made it: a session
+                # that crashed or was killed leaves one behind, and it is only
+                # removed by the next start-session.sh on the way up. Existing
+                # but refusing means exactly what not existing means — mpv is
+                # not running — so it has to be the same sentence, or the same
+                # situation reads as two different faults depending on how the
+                # last session ended.
+                raise MpvError("player is not running") from e
             s.sendall(payload)
             buf = b""
             while True:
@@ -108,7 +118,28 @@ def stop():
 
 
 def available():
-    return os.path.exists(SOCKET_PATH)
+    """Is something listening — not "is there a socket file".
+
+    Those came apart the moment a session was killed: mpv's socket file
+    outlives mpv and is only cleared by the next start-session.sh, so the
+    file-existence version answered True for a player that was not there.
+    /player/state then reported available, and the UI drew a channel bar over
+    a picture nothing was producing.
+
+    One connect on a unix socket, quarter-second timeout. This is polled, and
+    it costs about what stat() costs.
+    """
+    if not os.path.exists(SOCKET_PATH):
+        return False
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(0.25)
+    try:
+        s.connect(SOCKET_PATH)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
 
 
 def state():

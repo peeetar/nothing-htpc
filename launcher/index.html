@@ -176,6 +176,68 @@
     flex: none;
     font-variant-numeric: tabular-nums;
   }
+  /* The one piece of discoverability on this screen: without it the channel
+     list is a feature nobody on a sofa finds, because Ⓐ over full-screen
+     video looks like it does nothing. */
+  #barhint {
+    letter-spacing: var(--track-label);
+    font-size: var(--size-micro);
+    color: var(--faint);
+    flex: none;
+    white-space: nowrap;
+  }
+  #barhint b { color: var(--dim); font-weight: 400; }
+
+  /* ---------- TV: the channel list ----------
+     The dial made visible. It slides in over the video rather than replacing
+     it — the picture keeps playing behind, which is the whole reason the
+     launcher is one transparent page. Red marks the channel that is on;
+     the glow marks the one the cursor is over. */
+  #chanlist {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 36vw; min-width: 22em; max-width: 34em;
+    background: var(--scrim);
+    border-right: var(--line-hair) solid var(--rule);
+    /* The bottom padding clears the channel bar: the list is full height so it
+       reads as a panel and not as a popover, but its hints must never land
+       under the bar that slides up while it is open. */
+    padding: var(--space-pad-y) var(--space-4)
+             calc(var(--layout-bar-height) + var(--space-3)) var(--space-pad-x);
+    display: flex; flex-direction: column; gap: var(--space-3);
+    transform: translateX(-101%);
+    transition: transform var(--motion-view) var(--motion-ease);
+    z-index: 4;
+  }
+  #chanlist.on { transform: translateX(0); }
+  #chanlist .listhead { display: flex; align-items: baseline; justify-content: space-between; gap: 1.4em; }
+  #chanhead { line-height: 0; }
+  #chancount { letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint); }
+  #chanrows { display: flex; flex-direction: column; gap: var(--space-1); }
+  .chanrow {
+    display: flex; align-items: center; gap: 1.2em;
+    padding: 0.5em 0.8em;
+    outline: var(--line-hair) solid transparent;
+    opacity: 0.45;
+    transition: opacity var(--motion-quick) var(--motion-ease-out),
+                outline-color var(--motion-quick) var(--motion-ease-out),
+                box-shadow var(--motion-quick) var(--motion-ease-out);
+  }
+  /* flex, not line-height:0 — an inline SVG sits on the text baseline and the
+     number ends up riding above the name it belongs to. Its width is set per
+     render from the dot engine, so the column fits the longest number. */
+  .chanrow .cno { flex: none; display: flex; align-items: center; }
+  .chanrow .cname {
+    flex: 1; min-width: 0;
+    letter-spacing: var(--track-label); font-size: var(--size-small); color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-transform: none;
+  }
+  /* State, not focus: this is the channel currently tuned, which is often not
+     the one under the cursor. */
+  .chanrow .clive { width: 0.5em; height: 0.5em; border-radius: 50%; background: transparent; flex: none; }
+  .chanrow.live .clive { background: var(--red); }
+  .chanrow.sel { opacity: 1; outline-color: var(--ink); box-shadow: var(--glow-card-tight); }
+  #chanlist .hints { margin-top: auto; gap: 2.2em; }
   #chanstate {
     position: absolute; left: 50%; top: 50%;
     transform: translate(-50%, -50%);
@@ -187,6 +249,81 @@
     transition: opacity var(--motion-view) var(--motion-ease-out);
   }
   #chanstate.on { opacity: 1; }
+
+  /* ---------- MOVIES / SHOWS: the stream picker ----------
+     The channel list's twin, and deliberately so: same windowed rows, same
+     two markers, mirrored to come in from the right because it belongs to
+     the detail panel rather than to the picture. Red is the source that is
+     playing, the glow is the row the cursor is over — usually different
+     rows, which is the same lesson the channel list teaches.
+
+     It exists because a torrent is not a channel: the first copy of a film
+     can simply not be there, and the only useful answer to that is the next
+     copy, not an error. */
+  #sources {
+    position: absolute; right: 0; top: 0; bottom: 0;
+    width: 52vw; min-width: 30em; max-width: 52em;
+    /* Opaque, unlike the channel list. That one is a scrim because live video
+       is behind it and the whole point is that the picture keeps playing;
+       this one has the detail panel behind it, and letting a film synopsis
+       show through a list of torrents is just two texts fighting. */
+    background: var(--bg);
+    border-left: var(--line-hair) solid var(--rule);
+    padding: var(--space-pad-y) var(--space-pad-x) var(--space-4) var(--space-4);
+    display: flex; flex-direction: column; gap: var(--space-3);
+    transform: translateX(101%);
+    transition: transform var(--motion-view) var(--motion-ease);
+    z-index: 6;
+  }
+  #sources.on { transform: translateX(0); }
+  #sources .listhead { display: flex; align-items: baseline; justify-content: space-between; gap: 1.4em; }
+  #srchead { line-height: 0; }
+  #srccount { letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint); }
+  #srcrows { display: flex; flex-direction: column; gap: var(--space-1); }
+  .srcrow {
+    display: flex; align-items: center; gap: 1.1em;
+    padding: 0.5em 0.8em;
+    outline: var(--line-hair) solid transparent;
+    opacity: 0.45;
+    transition: opacity var(--motion-quick) var(--motion-ease-out),
+                outline-color var(--motion-quick) var(--motion-ease-out),
+                box-shadow var(--motion-quick) var(--motion-ease-out);
+  }
+  /* Same flex trick as .chanrow .cno — an inline SVG would otherwise sit on
+     the text baseline and ride above the row it labels. Its width is set per
+     render from the dot engine, so the column fits the longest quality tag
+     and every source name starts at the same x. */
+  .srcrow .sq { flex: none; display: flex; align-items: center; }
+  .srcrow .sname {
+    flex: 1; min-width: 6em;
+    letter-spacing: var(--track-tight); font-size: var(--size-small); color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-transform: none;
+  }
+  .srcrow .ssize, .srcrow .sseeds {
+    flex: none; letter-spacing: var(--track-label);
+    font-size: var(--size-micro); color: var(--dim);
+    white-space: nowrap;
+  }
+  .srcrow .ssize { min-width: 5.5em; text-align: right; }
+  .srcrow .sseeds { min-width: 5em; text-align: right; }
+  /* A debrid link plays now; a torrent has to find peers first. Worth one
+     character of difference before Ⓐ rather than a surprise after it. */
+  .srcrow .stag {
+    flex: none; letter-spacing: var(--track-label);
+    font-size: var(--size-micro); color: var(--faint);
+    min-width: 4.2em; white-space: nowrap;
+  }
+  .srcrow.outside .sq { opacity: 0.5; }
+  .srcrow .slive { width: 0.5em; height: 0.5em; border-radius: 50%; background: transparent; flex: none; }
+  .srcrow.live .slive { background: var(--red); }
+  .srcrow.sel { opacity: 1; outline-color: var(--ink); box-shadow: var(--glow-card-tight); }
+  #sources .hints { margin-top: auto; gap: 2.2em; }
+  #srcempty {
+    letter-spacing: var(--track-wide); font-size: var(--size-small);
+    color: var(--dim);
+  }
+
   /* The dot indicator that replaced analog static. Three dots, one cycle. */
   .pulse { display: flex; gap: 0.55em; }
   .pulse i {
@@ -352,9 +489,9 @@
   }
   #dreviews .rdots i.on { background: var(--red); }
   /* The reviews cross-fade, so they are stacked absolutely and the stack
-     needs a height of its own. Four lines plus the star row is what the
-     longest review settles at once the bottom mask has clipped it. */
-  #rstack { position: relative; height: 11em; }
+     needs a height of its own. Four lines plus the star row is what fits;
+     a review longer than that scrolls itself rather than being cut off. */
+  #rstack { position: relative; height: var(--layout-detail-review-height); }
   .review {
     position: absolute; inset: 0;
     display: flex; flex-direction: column; gap: 0.9em;
@@ -370,15 +507,101 @@
     font-size: var(--size-micro); letter-spacing: var(--track-label); color: var(--dim);
     text-transform: none;
   }
+  /* A review is arbitrary length and the panel is not. This used to clamp it
+     and fade the fourth line out, which read as "the rest of this sentence is
+     gone" — so now .rbody is a viewport and .rtext crawls up inside it, holds
+     at the bottom, and rides back. Same idea as the news marquee, turned
+     vertical, and driven from the theme in px/s so a review twice as long
+     takes twice as long rather than moving twice as fast. */
   .review .rbody {
+    flex: 1; min-height: 0; overflow: hidden;
     font-size: var(--size-small); line-height: 1.75; color: var(--dim);
     letter-spacing: var(--track-tight); text-transform: none;
     max-width: 68ch;
-    /* A review is arbitrary length and the panel is not: clamp it and fade
-       the last line out rather than letting it collide with the hints. */
-    overflow: hidden;
-    -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+  }
+  .review .rtext { display: block; will-change: transform; }
+  /* The mask only exists while there is text past the edge, and only on the
+     ends that have any: a review that fits is not faded at all, and one
+     scrolled to the bottom fades at the top instead of pretending the last
+     line continues. */
+  .review .rbody.more {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-review)), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-review)), transparent 100%);
+  }
+  .review .rbody.more.scrolled {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review),
+      #000 calc(100% - var(--fade-review)), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review),
+      #000 calc(100% - var(--fade-review)), transparent 100%);
+  }
+  .review .rbody.end.more.scrolled {
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review), #000 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review), #000 100%);
+  }
+
+  /* ---------- SHOWS: seasons and episodes ----------
+     Where a film has reviews a show has a dial of its own. Seasons are a tab
+     strip (◂ ▸) and the episodes of the open one are a list (▴ ▾) — one
+     screenful at a time, windowed, because a long-running show has hundreds
+     and every row would otherwise be real DOM on a 1 GB box. */
+  #dseasons { flex: none; display: flex; flex-direction: column; gap: var(--space-2); }
+  /* Label left, position right — the count lines up with the air dates down
+     the right edge of the episode list rather than crowding the label. */
+  #dseasons .rhead {
+    display: flex; align-items: center; justify-content: space-between; gap: 1.2em;
+    max-width: 68ch;
+    font-size: var(--size-micro); letter-spacing: var(--track-label); color: var(--faint);
+  }
+  #stabs {
+    display: flex; gap: 0.5em;
+    overflow: hidden; white-space: nowrap;
+    padding: 0.2em 0;
+  }
+  .stab {
+    flex: none;
+    padding: 0.45em 1.1em;
+    outline: var(--line-hair) solid var(--rule);
+    letter-spacing: var(--track-label); font-size: var(--size-micro);
+    color: var(--dim); opacity: 0.6;
+    transition: opacity var(--motion-quick) var(--motion-ease-out),
+                color var(--motion-quick) var(--motion-ease-out),
+                outline-color var(--motion-quick) var(--motion-ease-out);
+  }
+  .stab.sel { opacity: 1; color: var(--ink); outline-color: var(--ink); box-shadow: var(--glow-card-tight); }
+  /* Same measure as the plot and the reviews above it: a line of episode
+     titles running the full width of a 55" screen is unreadable. */
+  #eplist { display: flex; flex-direction: column; max-width: 68ch; }
+  .eprow {
+    display: flex; align-items: baseline; gap: 1.4em;
+    padding: 0.4em 0.8em;
+    outline: var(--line-hair) solid transparent;
+    opacity: 0.5;
+    transition: opacity var(--motion-quick) var(--motion-ease-out),
+                outline-color var(--motion-quick) var(--motion-ease-out),
+                box-shadow var(--motion-quick) var(--motion-ease-out);
+  }
+  .eprow .epno {
+    flex: none; width: 3em;
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+  /* An episode title can be in any script and is content, not a label — so
+     body font, not uppercase. */
+  .eprow .epname {
+    flex: 1; min-width: 0;
+    font-size: var(--size-small); letter-spacing: var(--track-tight); color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-transform: none;
+  }
+  .eprow .epdate {
+    flex: none;
+    letter-spacing: var(--track-label); font-size: var(--size-micro); color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .eprow.sel { opacity: 1; outline-color: var(--ink); box-shadow: var(--glow-card-tight); }
+  #dseasons .empty {
+    font-size: var(--size-small); letter-spacing: var(--track-label); color: var(--faint);
+    padding: 0.8em;
   }
 
   /* ---------- NEWS ----------
@@ -559,7 +782,16 @@
     <div id="chanbar">
       <div id="channum"></div>
       <div id="channame">—</div>
+      <div id="barhint"></div>
       <div id="chanclock">--:--</div>
+    </div>
+    <div id="chanlist">
+      <div class="listhead">
+        <span id="chanhead"></span>
+        <span id="chancount"></span>
+      </div>
+      <div id="chanrows"></div>
+      <div class="hints" id="chanhints"></div>
     </div>
   </div>
 
@@ -582,8 +814,27 @@
           <div class="rhead"><span id="rlabel"></span><span class="rdots" id="rdots"></span></div>
           <div id="rstack"></div>
         </div>
+        <!-- A show gets this where a film gets the reviews above. Only one of
+             the two is ever displayed; openDetail picks by kind. -->
+        <div id="dseasons">
+          <div class="rhead"><span id="slabel"></span><span id="scount"></span></div>
+          <div id="stabs"></div>
+          <div id="eplist"></div>
+        </div>
         <div class="hints" id="detailhints"></div>
       </div>
+    </div>
+    <!-- The stream picker, over the detail panel. Sibling of #detail rather
+         than a child so it slides across the whole screen, the way the
+         channel list does over the picture. -->
+    <div id="sources">
+      <div class="listhead">
+        <span id="srchead"></span>
+        <span id="srccount"></span>
+      </div>
+      <div id="srcrows"></div>
+      <div id="srcempty"></div>
+      <div class="hints" id="srchints"></div>
     </div>
   </div>
 

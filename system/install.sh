@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # nothing-htpc installer — Phase 1 of PACKAGING.md.
 #
-# Turns a fresh Raspberry Pi OS Lite install into the HTPC. Idempotent: run
-# it again after a git pull. Everything it does is also written out in
-# README.md, so nothing here is a black box.
+# Turns a fresh minimal Linux install into the HTPC. Idempotent: run it again
+# after a git pull. Everything it does is also written out in README.md, so
+# nothing here is a black box.
+#
+# Targets x86_64 since 13 August 2026 — a Fedora laptop for development, an
+# AMD-GPU box in production. The Raspberry Pi branches below are kept because
+# they cost nothing and are keyed off the presence of a Pi boot config, so on
+# x86 they simply do not fire. See the appendix in README.md.
 #
 #   sudo ./system/install.sh              install / update
 #   ./system/install.sh --dry-run         print what it would do
@@ -37,12 +42,46 @@ HTPC_USER="${SUDO_USER:-$(id -un)}"
 HTPC_UID="$(id -u "$HTPC_USER")"
 
 # peerflix and webtorrent are gone with the July 2026 remodel: torrent
-# streaming is TorrServer now, a single static Go binary that apt does not
-# carry. It is optional — live TV, news, weather and music all work without
+# streaming is TorrServer now, a single static Go binary that no distro
+# carries. It is optional — live TV, news, weather and music all work without
 # it, only MOVIES and SHOWS need it — so it is not in this list and step 6
 # just says whether it is running. See README.md.
-PKGS=(cage chromium mpv foot htop python3 python3-evdev v4l-utils playerctl
-      pipewire pipewire-audio wireplumber fonts-dejavu-core git curl)
+#
+# Two package lists, because the same software has different names in each
+# ecosystem and the box is developed on Fedora and deployed on whatever the
+# HTPC ends up running. This is constraint 25 again in a different costume:
+# assuming one distro's name for a thing is how a working machine reports
+# itself broken. `chromium` vs `chromium-browser` is the same package.
+#
+# gamescope and steam are deliberately NOT here. The GAMING tile reports
+# which of them is missing, on the TV and in the journal, which is better
+# than making an unrelated install fail — and on a dev laptop neither is
+# wanted anyway.
+detect_pm() {
+  if   command -v dnf     >/dev/null; then echo dnf
+  elif command -v apt-get >/dev/null; then echo apt
+  else echo ""; fi
+}
+PM="$(detect_pm)"
+
+PKGS_APT=(cage chromium mpv foot htop python3 python3-evdev v4l-utils playerctl
+          pipewire pipewire-audio wireplumber fonts-dejavu-core git curl)
+PKGS_DNF=(cage chromium mpv foot htop python3 python3-evdev v4l-utils playerctl
+          pipewire pipewire-pulseaudio wireplumber dejavu-sans-fonts git curl)
+
+case "$PM" in
+  dnf) PKGS=("${PKGS_DNF[@]}") ;;
+  *)   PKGS=("${PKGS_APT[@]}") ;;
+esac
+
+# Is one package installed? Asked the way the local package manager answers.
+pkg_installed() {
+  case "$PM" in
+    dnf) rpm -q "$1" >/dev/null 2>&1 ;;
+    apt) dpkg -s "$1" >/dev/null 2>&1 ;;
+    *)   return 1 ;;
+  esac
+}
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; FAILED=1; }
@@ -79,30 +118,49 @@ if [ "$CHECK" = 1 ]; then
   FAILED=0
   step "Hardware"
   if grep -qi raspberry /proc/device-tree/model 2>/dev/null; then
-    ok "$(tr -d '\0' < /proc/device-tree/model)"
+    ok "$(tr -d '\0' < /proc/device-tree/model) (retired target — see README appendix)"
   else
-    warn "not a Raspberry Pi — CEC and hardware decode checks will fail"
+    ok "$(uname -m) — $(sed -n 's/^model name[ \t]*: *//p' /proc/cpuinfo | head -1)"
   fi
+  ok "package manager: ${PM:-none found}"
   mem=$(( $(sed -n 's/^MemTotal: *\([0-9]*\).*/\1/p' /proc/meminfo) / 1024 ))
-  [ "$mem" -ge 900 ] && ok "${mem}MB RAM" || warn "${mem}MB RAM is very tight"
+  [ "$mem" -ge 1800 ] && ok "${mem}MB RAM" || warn "${mem}MB RAM is tight — try ?profile=lite"
 
   step "Packages"
-  for p in "${PKGS[@]}"; do
-    dpkg -s "$p" >/dev/null 2>&1 && ok "$p" || bad "$p missing"
-  done
+  if [ -z "$PM" ]; then
+    warn "no apt or dnf — cannot check packages on this distro"
+  else
+    for p in "${PKGS[@]}"; do
+      pkg_installed "$p" && ok "$p" || bad "$p missing"
+    done
+  fi
 
   step "Graphics + CEC"
-  cfg=$(boot_config)
-  if [ -n "$cfg" ] && grep -q '^dtoverlay=vc4-kms-v3d' "$cfg"; then
-    ok "vc4-kms-v3d enabled in $cfg"
-  else
-    bad "vc4-kms-v3d not enabled — no display, no /dev/cec0"
-  fi
-  [ -e /dev/cec0 ] && ok "/dev/cec0 present" || bad "/dev/cec0 missing"
+  # The DRM device is the only hard requirement: without it cage has nothing
+  # to draw on and the session restart-loops with no output, which looks
+  # exactly like a dead box.
   compgen -G "/dev/dri/card*" >/dev/null && ok "DRM device present" \
                                          || bad "no /dev/dri/card* — cage has nothing to draw on"
-  [ -e /dev/video10 ] && ok "V4L2 H.264 decoder present" \
-                      || warn "/dev/video10 missing — software decode only"
+  cfg=$(boot_config)
+  if [ -n "$cfg" ]; then
+    # Only meaningful on a Pi, and only a Pi has this file.
+    grep -q '^dtoverlay=vc4-kms-v3d' "$cfg" \
+      && ok "vc4-kms-v3d enabled in $cfg" \
+      || bad "vc4-kms-v3d not enabled — no display, no /dev/cec0"
+  fi
+  # CEC is a warning, not a failure: x86 needs a Pulse-Eight adapter, and
+  # without one the box is keyboard-driven and entirely fine.
+  [ -e /dev/cec0 ] && ok "/dev/cec0 present" \
+    || warn "/dev/cec0 missing — no TV remote (needs a CEC adapter on x86)"
+  if [ -e /dev/video10 ]; then
+    ok "V4L2 H.264 decoder present"
+  elif command -v vainfo >/dev/null; then
+    vainfo 2>/dev/null | grep -q VAProfile \
+      && ok "VA-API hardware decode available" \
+      || warn "vainfo reports no profiles — software decode only"
+  else
+    warn "cannot tell if hardware decode works — install libva-utils for vainfo"
+  fi
 
   step "Permissions"
   for g in input video render; do
@@ -180,8 +238,18 @@ echo "  user:  $HTPC_USER (uid $HTPC_UID)"
 [ "$DRY" = 1 ] && echo "  MODE:  dry run, nothing will change"
 
 step "1/6 Packages"
-run apt-get update
-run apt-get install -y "${PKGS[@]}"
+case "$PM" in
+  dnf)
+    run dnf install -y "${PKGS[@]}"
+    ;;
+  apt)
+    run apt-get update
+    run apt-get install -y "${PKGS[@]}"
+    ;;
+  *)
+    warn "no apt or dnf found — install these yourself: ${PKGS[*]}"
+    ;;
+esac
 
 step "2/6 Boot config"
 cfg=$(boot_config)

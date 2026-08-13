@@ -64,12 +64,14 @@
 
     "fade": {
       "_note": "Edge masks, as a percentage of the element's width. The news marquee fades out before it reaches its category label rather than sliding under it — 3% is enough to read as a fade and not as a cut.",
-      "edge": "3%"
+      "edge": "3%",
+      "_note-review": "The vertical equivalent, for the review paragraph as it auto-scrolls: a fade at whichever end has text beyond it, so a half-line at the edge reads as 'there is more' instead of as a cut-off word. Bigger than the horizontal one because a line of body copy is taller than it is thin.",
+      "review": "14%"
     }
   },
 
   "motion": {
-    "_note": "Expressive but restrained: things assemble rather than slide, and nothing bounces. Durations are milliseconds. The pi3 profile cuts these; see profiles.",
+    "_note": "Expressive but restrained: things assemble rather than slide, and nothing bounces. Durations are milliseconds. The `lite` profile cuts these; see profiles.",
     "instant": 0,
     "quick": 160,
     "view": 240,
@@ -82,6 +84,9 @@
     "grid-scroll": 320,
     "review-hold": 7000,
     "review-fade": 700,
+    "_note-review-scroll": "A review longer than the panel scrolls itself rather than being clipped at the fourth line. Same idea as the news marquee and the same unit: px/s against the real overflow, so a long review and a slightly-too-long one crawl at one readable speed instead of one duration. review-scroll-hold is the pause at the top and again at the bottom, so the first and last lines can be read before anything moves.",
+    "review-scroll-px-per-s": 13,
+    "review-scroll-hold": 2400,
     "ease": "cubic-bezier(.2,.9,.3,1)",
     "ease-out": "ease",
     "breathe": 4000
@@ -101,13 +106,21 @@
     "detail-poster-width": "26vw",
     "detail-reviews": 3,
     "detail-cast": 5,
+    "_note-detail-bottom": "The bottom half of the detail panel has two occupants and never both: a film's reviews, or a show's season tabs and episode list. Both hang off the plot above them and the hints claim whatever is left, so raising either of these eats empty space rather than moving anything.",
+    "detail-review-height": "11em",
+    "detail-episode-rows": 7,
     "clock-dot-scale": 0.0145,
     "menu-dot-scale": 0.0018,
     "menu-gap": "2.2vw",
     "news-rows-top": 4,
     "news-rows-bottom": 1,
     "weather-days": 3,
-    "channel-list-rows": 9
+    "_note-channels": "The channel list is a window onto the dial, not the whole of it: `channel-list-rows` rows are drawn and the slice moves with the cursor, so a hundred-channel m3u costs the same to draw as a ten-channel one.",
+    "channel-list-rows": 9,
+    "channel-list-dot": 3.4,
+    "_note-sources": "The stream picker, same windowing rule as the channel list and for the same reason — a popular film comes back with sixty copies and only eight of them are ever on screen. `source-dot` sizes the dot-matrix quality tag that opens each row, which is the picker's equivalent of a channel number.",
+    "source-list-rows": 8,
+    "source-dot": 2.6
   },
 
   "copy": {
@@ -124,7 +137,8 @@
       "shows": "SHOWS",
       "news": "NEWS",
       "weather": "WEATHER",
-      "music": "MUSIC"
+      "music": "MUSIC",
+      "gaming": "GAMING"
     },
     "hints": {
       "navigate": "NAVIGATE",
@@ -132,9 +146,16 @@
       "back": "BACK",
       "home": "RETURN HOME",
       "channel": "CHANNEL",
+      "channels": "CHANNELS",
+      "tune": "TUNE",
+      "season": "SEASON",
+      "episode": "EPISODE",
       "play": "PLAY",
       "playpause": "PLAY / PAUSE",
-      "track": "TRACK"
+      "track": "TRACK",
+      "sources": "OTHER SOURCES",
+      "source": "SOURCE",
+      "launch": "LAUNCH"
     },
     "state": {
       "connecting": "CONNECTING",
@@ -147,7 +168,9 @@
       "unavailable": "UNAVAILABLE",
       "idle": "IDLE",
       "playing": "PLAYING",
-      "paused": "PAUSED"
+      "paused": "PAUSED",
+      "launching": "LAUNCHING",
+      "running": "RUNNING"
     },
     "music": {
       "header": "SPOTIFY CONNECT",
@@ -178,17 +201,33 @@
       "cast": "CAST",
       "reviews": "REVIEWS",
       "no-reviews": "NO REVIEWS",
-      "page": "PAGE"
+      "page": "PAGE",
+      "season": "SEASON",
+      "specials": "SPECIALS",
+      "episode": "EPISODE",
+      "episodes": "EPISODES",
+      "_note-sources": "The stream picker. Every copy of a title the addons know about, so a dead or badly-seeded source is one press away from a different one rather than a dead end. `direct` marks a debrid link, which plays immediately; everything else is a torrent that has to buffer. `outside` marks a stream past the playback envelope set in stremio.py.",
+      "sources": "SOURCES",
+      "no-sources": "NO SOURCES FOUND",
+      "seeds": "SEEDS",
+      "direct": "DIRECT",
+      "outside": "HEAVY"
+    },
+    "tv": {
+      "_note": "The channel list — the dial made visible. TV is the one screen where numbers still mean something, so this is the only place they are ever browsed.",
+      "channels": "CHANNELS",
+      "live": "LIVE"
     }
   },
 
   "profiles": {
-    "_note": "Hardware profiles. The base values above target x86; `pi3` is what keeps the original Raspberry Pi 3B+ alive — less motion, fewer images in flight, no marquee. Selected by theme.js from ?profile= or the backend's config.",
-    "pi3": {
+    "_note": "Hardware profiles. The base values target the x86 boxes this now runs on — a Fedora laptop for development, an AMD-GPU machine in production. `lite` is a generic low-power fallback: less motion, fewer images in flight, a slower marquee. It was `pi3` until August 2026, when the Raspberry Pi 3B+ stopped being a target; the numbers are the ones that kept a 1 GB board usable, which makes them a sensible floor for any weak machine rather than a description of one. Selected by theme.js from ?profile= or the backend's config.",
+    "lite": {
       "motion": {
         "dot-assemble": 0,
         "dot-stagger": 0,
         "marquee-px-per-s": 24,
+        "review-scroll-px-per-s": 10,
         "view": 180
       },
       "layout": {
@@ -196,7 +235,10 @@
         "grid-rows-per-page": 4,
         "posters-in-flight": 16,
         "news-rows-top": 2,
-        "detail-reviews": 2
+        "detail-reviews": 2,
+        "detail-episode-rows": 5,
+        "channel-list-rows": 7,
+        "source-list-rows": 6
       }
     }
   }

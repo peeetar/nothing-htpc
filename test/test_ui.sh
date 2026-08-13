@@ -73,10 +73,13 @@ echo "HOME"
 dom ""; shot home ""
 has  "boots without a JS exception"   "<circle"        # the dot engine ran
 has  "clock rendered"                  'id="clock"'
-has  "all six tiles"                   "WEATHER"
+has  "all seven tiles"                 "WEATHER"
 has  "music tile"                      "MUSIC"
 has  "theme applied (css vars stamped)" "--ink"
-hasnt "no gaming tile (constraint 14)"  ">GAMING<"
+# GAMING came back in August 2026 (it was cut in July). It is the only tile
+# that launches a process rather than showing a view, which is exactly why the
+# tile model was kept general enough to take it back.
+has  "gaming tile is back"             ">GAMING<"
 hasnt "no teletext page numbers"        "993"
 
 echo "MOVIES"
@@ -108,6 +111,52 @@ has  "review author"                   "cinemabuff"
 has  "stars drawn in the dot matrix"   'aria-label="★★★★★"'
 has  "first review visible"            'class="review on"'
 has  "review position dots"            'id="rdots"'
+# A review longer than the panel scrolls inside it instead of being clipped at
+# the fourth line. The moving element has to exist and the overflow has to have
+# been measured — .more is only set when there is text past the bottom edge.
+has  "review text is its own scroller" 'class="rtext"'
+has  "long review detected as overflowing" 'class="rbody more'
+has  "the end of a long review is present" "telling you that from its first shot"
+# Movie detail must not grow a season chooser.
+hasnt "no season tabs on a film"        'class="stab'
+
+echo "SHOW DETAIL — season tabs and episode chooser"
+dom "&view=grid&kind=show&detail=1"; shot show-detail "&view=grid&kind=show&detail=1"
+has  "show detail panel open"          'id="detail" class="on"'
+has  "a fixture show title"            "Severance"
+has  "season label"                    "SEASON"
+has  "season tabs rendered"            'class="stab'
+has  "first season selected"           'class="stab sel"'
+has  "episode list rendered"           'class="eprow'
+has  "episode cursor"                  'class="eprow sel"'
+has  "named episode"                   "The You You Are"
+has  "episode number column"           'class="epno"'
+has  "episode count"                   "EPISODE 1/9"
+has  "show hints mention seasons"      "SEASON"
+# The reviews block is the film half of the panel and must be put away.
+hasnt "no reviews block on a show"      'class="review on"'
+
+echo "MOVIE DETAIL — the stream picker"
+dom "&view=grid&kind=movie&detail=1&sources=1"; shot sources "&view=grid&kind=movie&detail=1&sources=1"
+has  "picker open"                     'id="sources" class="on"'
+has  "picker heading in dot-matrix"    'aria-label="SOURCES"'
+has  "a source row"                    'class="srcrow'
+has  "cursor on a row"                 "srcrow sel"
+has  "quality tag as dots"             'aria-label="1080P"'
+has  "the indexer name"                "ThePirateBay"
+has  "size column"                     "2.31 GB"
+has  "seeder count"                    "2081"
+has  "a debrid link is marked"         "DIRECT"
+# A stream past the playback envelope is flagged, never hidden — if every copy
+# is a 4K remux, playing one badly beats "no streams found".
+has  "outside-envelope stream shown"   'class="srcrow outside"'
+has  "and flagged rather than hidden"  "HEAVY"
+has  "position counter"                'id="srccount"'
+has  "picker hints"                    'id="srchints"'
+# The picker is summoned over the panel; opening a film must not conjure it.
+dom "&view=grid&kind=movie&detail=1"
+hasnt "picker closed on a plain open"   'id="sources" class="on"'
+has  "the panel says how to reach it"  "OTHER SOURCES"
 
 echo "TV"
 dom "&view=tv"; shot tv "&view=tv"
@@ -116,6 +165,20 @@ has  "channel bar shown"               'id="chanbar" class="show"'
 has  "channel number in dot-matrix"    'aria-label="101"'
 has  "channel name from fixtures"      "MRT 1"
 has  "clock in the bar"                'id="chanclock"'
+has  "the list is discoverable"        'id="barhint"'
+# The list is summoned, not arrived at — entering TV shows the picture.
+hasnt "channel list closed on entry"    'id="chanlist" class="on"'
+
+echo "TV — the channel list"
+dom "&view=tv&list=1"; shot channels "&view=tv&list=1"
+has  "channel list open"               'id="chanlist" class="on"'
+has  "list heading in dot-matrix"      'aria-label="CHANNELS"'
+has  "a channel row"                   'class="chanrow'
+has  "cursor on a row"                 "chanrow sel"
+has  "the tuned channel is marked"     "live"
+has  "channel numbers as dots"         'aria-label="103"'
+has  "channel names"                   "KANAL 5"
+has  "position counter"                'id="chancount"'
 
 echo "NEWS"
 dom "&view=news"; shot news "&view=news"
@@ -151,17 +214,19 @@ has  "now playing from fixtures"       "NEW ORDER"
 has  "halftone art placeholder"        'id="mart"'
 has  "progress bar"                    'id="mbar"'
 
-echo "PI3 PROFILE"
-# The reduced profile is what keeps the original 3B+ alive. It must actually
-# change the layout, not just exist in the file.
+echo "LITE PROFILE"
+# The reduced profile — `pi3` until the Pi stopped being a target in August
+# 2026. Kept because the profile *mechanism* is what lets a weak box run this
+# at all, and it has to actually change the layout rather than just exist in
+# the file.
 DOM="$($CHROME --headless --disable-gpu --no-sandbox --hide-scrollbars \
         --virtual-time-budget=4000 --dump-dom \
-        "http://127.0.0.1:$PORT/index.html?fixtures=1&profile=pi3&view=grid&kind=movie" 2>/dev/null)"
-has  "pi3 profile renders"             'class="card'
+        "http://127.0.0.1:$PORT/index.html?fixtures=1&profile=lite&view=grid&kind=movie" 2>/dev/null)"
+has  "lite profile renders"            'class="card'
 if printf '%s' "$DOM" | grep -qF -- "--layout-grid-columns: 4"; then
-  echo "  ok   pi3 narrows the grid to 4 columns"; pass=$((pass + 1))
+  echo "  ok   lite narrows the grid to 4 columns"; pass=$((pass + 1))
 else
-  echo "  FAIL pi3 did not override grid-columns"; fail=$((fail + 1))
+  echo "  FAIL lite did not override grid-columns"; fail=$((fail + 1))
 fi
 
 echo

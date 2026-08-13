@@ -182,7 +182,9 @@ PY
 hdr "tools"
 KIOSK=1
 if command -v cage >/dev/null; then
-  ok "cage  ${D}$(cage --version 2>&1 | head -1)${Z}"
+  # -v, not --version: cage takes short options only and answers a long one
+  # with "invalid option -- '-'", printed right beside a green tick.
+  ok "cage  ${D}$(cage -v 2>&1 | head -1)${Z}"
 else
   warn "cage missing — falling back to backend-only"
   KIOSK=0
@@ -190,8 +192,10 @@ fi
 
 # Fedora ships the binary as chromium-browser, Debian as chromium. Probing
 # only one of them reported "missing" on a machine that had it.
+# Same list, same order as start-session.sh — a preflight that finds a browser
+# the session then cannot is worse than no preflight.
 CHROMIUM=""
-for c in chromium chromium-browser google-chrome google-chrome-stable; do
+for c in chromium chromium-browser chromium-freeworld google-chrome google-chrome-stable; do
   command -v "$c" >/dev/null && CHROMIUM="$c" && break
 done
 if [ -n "$CHROMIUM" ]; then
@@ -240,13 +244,47 @@ if [ "$KIOSK" = 0 ]; then
   say "  Fedora: sudo dnf install cage chromium mpv foot"
   say "  Debian: sudo apt install cage chromium mpv foot"
   say
+
+  # The video layer, without the kiosk around it. Backend-only used to mean
+  # backend-only, so TV and MOVIES resolved a stream, handed it to an mpv that
+  # was not running, and reported NO SIGNAL — which looks exactly like a dead
+  # channel. mpv here honours the same contract start-session.sh sets up (one
+  # idle process for the whole session, driven over the IPC socket, drawing no
+  # UI of its own); it is windowed rather than fullscreen, and it deliberately
+  # does NOT carry the Pi's cache tuning. Those numbers are a 1GB budget and
+  # they belong in start-session.sh, which is the thing the box actually runs.
+  export MPV_IPC_SOCKET="${MPV_IPC_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/htpc-mpv.sock}"
+  rm -f "$MPV_IPC_SOCKET"
+  if command -v mpv >/dev/null; then
+    mpv --idle=yes --input-ipc-server="$MPV_IPC_SOCKET" \
+        --force-window=yes --keep-open=no \
+        --no-osc --no-osd-bar --osd-level=0 \
+        --script="$HTPC_DIR/cabletv/shim.lua" \
+        --background-color='#000000' \
+        2>&1 | while IFS= read -r line; do printf 'mpv | %s\n' "$line"; done &
+    MPV_PID=$!
+    ok "mpv idle on $MPV_IPC_SOCKET  ${D}(its own window — no compositing)${Z}"
+    # The socket file outlives the process that made it, and a stale one is
+    # worse than none: connecting to it fails differently from finding nothing
+    # there, so the next run (or the test suite) reports a broken mpv instead
+    # of an absent one.
+    trap 'kill "$MPV_PID" 2>/dev/null
+          pkill -f -- "--input-ipc-server=$MPV_IPC_SOCKET" 2>/dev/null
+          rm -f "$MPV_IPC_SOCKET"
+          return 0 2>/dev/null || exit 0' EXIT
+  else
+    warn "mpv not installed — TV and MOVIES will resolve a stream and have nowhere to put it"
+  fi
+
+  say
   say "Backend-only — open http://127.0.0.1:8484 in a browser."
-  say "(Gamepad, weather and the whole UI work there; only the kiosk shell is"
-  say " missing, and launched apps land in your normal desktop.)"
+  say "(Gamepad, weather and the whole UI work there, and video plays in mpv's"
+  say " own window. What is missing is the kiosk shell and the one thing it"
+  say " proves: the page compositing over the video rather than beside it.)"
   hdr "session output"
-  # exec so Ctrl+C reaches the backend directly (it kills the running app on
-  # the way out); the tee above stays attached across the exec.
-  exec python3 -u "$HTPC_DIR/server/server.py"
+  # Not exec'd: the trap above has to survive to take mpv down with us.
+  python3 -u "$HTPC_DIR/server/server.py"
+  exit $?
 fi
 
 # Nested under a compositor wlroots needs the Wayland backend; on a bare TTY it
@@ -256,6 +294,17 @@ if [ -n "${WAYLAND_DISPLAY:-}" ]; then
   export WLR_RENDERER=pixman
   export WLR_NO_HARDWARE_CURSORS=1
   say "  wlroots          backend=wayland renderer=pixman (nested)"
+  # pixman is a software renderer and mpv's default gpu-next wants Vulkan.
+  # Inside this cage it gets VK_ERROR_SURFACE_LOST_KHR, walks its fallback
+  # chain to X11, and dies on an assertion in vo_x11_init — on the *first
+  # file*, not at startup, so it reads as a broken stream rather than a broken
+  # video output. wlshm is worse: it does not survive being idle at all
+  # ("input image format unknown"). gpu with the OpenGL/Wayland context is the
+  # one that both idles and plays here. The box never sets this; there mpv
+  # picks KMS/GL by itself and gets hardware decode with it.
+  export HTPC_MPV_VO_ARGS="${HTPC_MPV_VO_ARGS:---vo=gpu --gpu-api=opengl --gpu-context=wayland --hwdec=no}"
+  say "  mpv              $HTPC_MPV_VO_ARGS"
+  say "                   ${D}software path — the nested GPU is not usable${Z}"
 fi
 
 # start-session.sh backgrounds its daemons, so when cage goes away they are

@@ -3,6 +3,10 @@ CLAUDE.md
 __pycache__/
 *.pyc
 
+# Agent scratch: `git worktree add` targets land here and are not part of the
+# project. Committing one nests a whole second checkout inside this one.
+.claude/worktrees/
+
 # Per-box config. The repo is run in place, so this is how local decisions
 # (coordinates, app choices) survive a git pull. server.py prefers it over
 # server/config.json when it exists.

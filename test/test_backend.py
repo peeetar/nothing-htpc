@@ -28,6 +28,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 HTPC_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HTPC_DIR / "server"))
@@ -145,6 +146,14 @@ class TestFeeds(unittest.TestCase):
 # --- stremio -----------------------------------------------------------------
 
 class TestStremioRanking(unittest.TestCase):
+    """The x86 envelope (August 2026).
+
+    These used to assert the Pi 3B+ rules — 1080p, H.264, everything else last.
+    The Pi is gone and both targets decode HEVC/VP9/AV1 in hardware, so the
+    envelope inverted: nothing is penalised by default, and HTPC_MAX_HEIGHT /
+    HTPC_ALLOW_HEVC exist to *tighten* it for weaker hardware.
+    """
+
     def rank(self, title):
         return stremio._stream_rank({"name": "Torrentio", "title": title})
 
@@ -153,21 +162,110 @@ class TestStremioRanking(unittest.TestCase):
         few = self.rank("Film 1080p x264\n👤 12 💾 2GB")
         self.assertLess(many, few)
 
-    def test_oversized_sorts_last(self):
-        """Constraint 11: 2160p is not 'better quality' on a 3B+, it is a
-        slideshow. It sorts last but is not dropped — if it is the only copy,
-        playing it badly beats 'no streams found'."""
+    def test_2160p_now_wins_when_it_is_seeded_as_well(self):
+        """The whole point of dropping the Pi. Same seeding tier, more pixels."""
         big = self.rank("Film 2160p HDR\n👤 900")
-        ok = self.rank("Film 1080p x264\n👤 5")
-        self.assertLess(ok, big)
+        small = self.rank("Film 1080p x264\n👤 700")
+        self.assertLess(big, small)
 
-    def test_hevc_deprioritised_when_not_allowed(self):
+    def test_seeders_still_outrank_resolution_across_a_tier(self):
+        """A 4K copy with six seeders does not play at all, and 'does not play'
+        beats every resolution argument there is. Bucketing is what keeps this
+        true without letting 2140 seeders beat 2100."""
+        starved_4k = self.rank("Film 2160p REMUX\n👤 6")
+        healthy_1080 = self.rank("Film 1080p x264\n👤 1200")
+        self.assertLess(healthy_1080, starved_4k)
+
+    def test_hevc_is_not_penalised_by_default(self):
         hevc = self.rank("Film 1080p x265 HEVC\n👤 500")
-        h264 = self.rank("Film 1080p x264\n👤 50")
-        self.assertLess(h264, hevc)
+        h264 = self.rank("Film 1080p x264\n👤 500")
+        self.assertEqual(hevc, h264)
+
+    def test_envelope_still_tightens_when_asked(self):
+        """The env vars are the way back to a weak box, so they have to work."""
+        with mock.patch.object(stremio, "MAX_HEIGHT", 1080), \
+             mock.patch.object(stremio, "ALLOW_HEVC", False):
+            big = self.rank("Film 2160p HDR\n👤 900")
+            hevc = self.rank("Film 1080p x265\n👤 900")
+            ok = self.rank("Film 1080p x264\n👤 5")
+            self.assertLess(ok, big)
+            self.assertLess(ok, hevc)
+
+    def test_nothing_is_ever_dropped_for_being_outside(self):
+        """Sorting last is not the same as being excluded: if every copy of a
+        film is a 4K remux, playing one badly beats 'no streams found'."""
+        with mock.patch.object(stremio, "MAX_HEIGHT", 1080):
+            self.assertEqual(self.rank("Film 2160p\n👤 9")[0], 1)   # penalised
+        self.assertIsNotNone(self.rank("Film 2160p\n👤 9"))         # still ranked
 
     def test_unknown_resolution_is_not_excluded(self):
         self.assertEqual(self.rank("Film WEB-DL\n👤 30")[0], 0)
+
+
+class TestStreamRows(unittest.TestCase):
+    """What the source picker draws, read out of Torrentio's title text."""
+
+    SAMPLE = {
+        "name": "Torrentio\n1080p",
+        "title": "Dune.Part.Two.2024.1080p.BluRay.x264\n👤 2081 💾 2.31 GB ⚙️ ThePirateBay",
+        "infoHash": "abc123",
+    }
+
+    def test_parses_the_fields_the_picker_shows(self):
+        p = stremio._parse(self.SAMPLE)
+        self.assertEqual(p["height"], 1080)
+        self.assertEqual(p["seeds"], 2081)
+        self.assertEqual(p["size"], "2.31 GB")
+        self.assertEqual(p["source"], "ThePirateBay")
+
+    def test_a_debrid_link_is_marked_direct(self):
+        """It plays immediately; a magnet has to find peers first, and that is
+        worth saying before Ⓐ rather than after it."""
+        self.assertFalse(stremio._parse(self.SAMPLE).get("direct"))
+        rows = self._rows([self.SAMPLE, {"name": "RD+", "title": "x 1080p", "url": "https://d/x.mkv"}])
+        self.assertFalse(rows[0]["direct"])
+        self.assertTrue(rows[1]["direct"])
+
+    def test_rows_carry_the_index_play_takes_back(self):
+        """The page never handles an infoHash — it hands back a row number,
+        which is the only reason resolving can stay entirely server-side."""
+        rows = self._rows([self.SAMPLE, self.SAMPLE])
+        self.assertEqual([r["i"] for r in rows], [0, 1])
+
+    def test_missing_fields_are_empty_not_absent(self):
+        rows = self._rows([{"name": "x", "title": "no metadata here"}])
+        self.assertEqual(rows[0]["quality"], "")
+        self.assertEqual(rows[0]["size"], "")
+        self.assertEqual(rows[0]["seeds"], 0)
+
+    def _rows(self, streams):
+        with mock.patch.object(stremio, "streams", return_value=streams):
+            return stremio.stream_rows("movie", "tt1")
+
+
+class TestResolveByIndex(unittest.TestCase):
+    STREAMS = [
+        {"name": "a", "title": "first 1080p", "url": "https://d/first.mkv"},
+        {"name": "b", "title": "second 720p", "url": "https://d/second.mkv"},
+    ]
+
+    def test_index_picks_that_row_and_not_the_best(self):
+        with mock.patch.object(stremio, "streams", return_value=self.STREAMS):
+            url, _ = stremio.resolve("movie", "tt1", 1)
+        self.assertEqual(url, "https://d/second.mkv")
+
+    def test_no_index_is_the_rankings_own_pick(self):
+        with mock.patch.object(stremio, "streams", return_value=self.STREAMS):
+            url, _ = stremio.resolve("movie", "tt1")
+        self.assertEqual(url, "https://d/first.mkv")
+
+    def test_out_of_range_is_an_error_not_a_clamp(self):
+        """Silently playing something other than the row that was selected is
+        the one behaviour a picker must never have."""
+        with mock.patch.object(stremio, "streams", return_value=self.STREAMS):
+            with self.assertRaises(stremio.StremioError) as cm:
+                stremio.resolve("movie", "tt1", 9)
+        self.assertIn("no longer in the list", str(cm.exception))
 
     def test_meta_row_shape(self):
         row = stremio._meta_row({
@@ -185,6 +283,57 @@ class TestStremioRanking(unittest.TestCase):
         self.assertEqual(stremio._minutes(""), 0)
         self.assertEqual(stremio._minutes("1h 42min"), 1)   # first number wins
         self.assertEqual(stremio._minutes(142), 142)
+
+
+class TestStremioEpisodes(unittest.TestCase):
+    """Cinemeta's `videos` -> the rows the season/episode chooser draws."""
+
+    SAMPLE = {"videos": [
+        {"id": "tt1:1:2", "season": 1, "episode": 2, "number": 2,
+         "name": "The Rogue Prince", "released": "2022-08-28T05:00:00.000Z",
+         "overview": "a paragraph nobody has room to draw"},
+        {"id": "tt1:0:1", "season": 0, "number": 1, "name": "Premiere Special",
+         "firstAired": "2022-08-21T05:00:00.000Z"},
+        {"id": "tt1:1:1", "season": 1, "episode": 1, "number": 1,
+         "name": "The Heirs of the Dragon", "released": "2022-08-21T05:00:00.000Z"},
+        {"id": "tt1:2:1", "season": 2, "episode": 1, "number": 1, "name": ""},
+        {"season": 3, "episode": 1},                        # no id: unusable
+    ]}
+
+    def rows(self):
+        return stremio._episodes(self.SAMPLE)
+
+    def test_episode_ids_are_what_the_stream_addons_index(self):
+        """The whole reason no second lookup is needed at play time."""
+        self.assertEqual([r["id"] for r in self.rows()][:2], ["tt1:1:1", "tt1:1:2"])
+
+    def test_sorted_by_season_then_episode(self):
+        self.assertEqual([(r["season"], r["episode"]) for r in self.rows()][:3],
+                         [(1, 1), (1, 2), (2, 1)])
+
+    def test_specials_sort_last(self):
+        """Season 0 is recaps and behind-the-scenes. Kept, but nobody opens a
+        show to watch its making-of first."""
+        self.assertEqual(self.rows()[-1]["season"], 0)
+
+    def test_an_entry_without_an_id_is_dropped(self):
+        self.assertEqual(len(self.rows()), 4)
+        self.assertNotIn(3, [r["season"] for r in self.rows()])
+
+    def test_rows_stay_thin(self):
+        """A long-running show has hundreds of these and the Pi has 1 GB — the
+        overview is kilobytes a row for a line this screen cannot draw."""
+        self.assertEqual(set(self.rows()[0]),
+                         {"id", "season", "episode", "title", "released"})
+        self.assertEqual(self.rows()[0]["released"], "2022-08-21")
+
+    def test_falls_back_to_firstAired_and_a_missing_title_is_empty(self):
+        by_id = {r["id"]: r for r in self.rows()}
+        self.assertEqual(by_id["tt1:0:1"]["released"], "2022-08-21")
+        self.assertEqual(by_id["tt1:2:1"]["title"], "")
+
+    def test_no_videos_is_an_empty_list_not_an_error(self):
+        self.assertEqual(stremio._episodes({}), [])
 
 
 # --- mpv IPC -----------------------------------------------------------------
@@ -255,6 +404,25 @@ class TestMpvIPC(unittest.TestCase):
         with self.assertRaises(mpvipc.MpvError) as cm:
             mpvipc.command("get_property", "pause")
         self.assertIn("not running", str(cm.exception))
+
+    def test_a_stale_socket_reads_the_same_as_no_socket(self):
+        """The socket file outlives the process that made it — a killed or
+        crashed session leaves one behind until the next start-session.sh
+        removes it. Existing-but-refusing means mpv is not running, exactly
+        as not existing does, so it must not be a second, different sentence.
+        (This is also what made the suite fail after running the kiosk.)"""
+        dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        dead.bind(self.path)          # bound, never listening: connect refused
+        dead.close()
+        self.assertTrue(os.path.exists(self.path))
+        with self.assertRaises(mpvipc.MpvError) as cm:
+            mpvipc.command("get_property", "pause")
+        self.assertIn("not running", str(cm.exception))
+
+        # And the same has to hold for the thing the UI actually polls, or the
+        # channel bar draws over a picture nothing is producing.
+        self.assertFalse(mpvipc.available())
+        self.assertFalse(mpvipc.state()["available"])
 
     def test_roundtrip_skips_events_and_returns_data(self):
         fake = FakeMpv(self.path)

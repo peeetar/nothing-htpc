@@ -1,10 +1,17 @@
 {
-  "_note": "Dev-machine config, used by system/dev-session.sh --vm via HTPC_CONFIG so it never overwrites a deployed config.json. Since the July 2026 remodel there is nothing here to launch — every screen lives in the launcher page — so this exists to point the home screen's weather somewhere and to prove the config precedence still works. To exercise the player without a real stream, tune the launcher to a channel whose URL is `av://lavfi:smptebars=size=1280x720:rate=30` in cabletv/channels.m3u.",
+  "_note": "Dev-machine config, used by system/dev-session.sh --vm via HTPC_CONFIG so it never overwrites a deployed config.json. Every screen except GAMING lives in the launcher page, so this file mostly points the home screen's weather somewhere and proves the config precedence still works. To exercise the player without a real stream, tune the launcher to a channel whose URL is `av://lavfi:smptebars=size=1280x720:rate=30` in cabletv/channels.m3u.",
   "weather": {
     "lat": 41.117,
     "lon": 20.802,
     "_note": "Weather works anywhere with internet."
   },
   "tmdb_key": "",
-  "apps": []
+  "apps": [
+    {
+      "id": "gaming",
+      "label": "GAMING",
+      "command": ["${HTPC_DIR}/system/gamescope-session.sh"],
+      "_note": "Kept here too so the tile is real in --vm. Nested gamescope inside a nested cage is not a sensible thing to run, and it will say so on stderr rather than pretending — which is the point: there is no demo mode, so the tile either launches or reports why it did not."
+    }
+  ]
 }

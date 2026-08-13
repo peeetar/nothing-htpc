@@ -18,7 +18,9 @@ Endpoints:
   GET  /channels      live TV channels from cabletv/channels.m3u
   GET  /catalog/<k>   movie|show catalogue from Cinemeta
   GET  /meta/<k>/<id> one title's full metadata
+  GET  /streams/<k>/<id>  every stream on offer, ranked — the source picker
   POST /play          resolve a title through Torrentio and hand it to mpv
+                      (body may carry an `index` from /streams)
   POST /player/load   play a URL (live TV)
   POST /player/stop   back to idle
   GET  /player/state  position, buffering, what is loaded
@@ -371,6 +373,15 @@ def launch(app_id):
     _preflight(app_id, cmd)
     kill_current()
 
+    # Whatever was playing stops before the app takes the display. mpv is
+    # always alive under the launcher, so without this a channel keeps its
+    # audio going underneath a game — the picture is covered, the sound is
+    # not. Same reasoning as /home. A player that is not up is not an error.
+    try:
+        mpvipc.stop()
+    except mpvipc.MpvError:
+        pass
+
     done = threading.Event()
     t0 = time.monotonic()
     with state_lock:
@@ -432,6 +443,19 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self._send(200, stremio.meta(parts[2], parts[3]))
             except stremio.StremioError as e:
+                self._send(502, {"ok": False, "msg": str(e)})
+        elif path.startswith("/streams/"):
+            # The stream picker's list. Separate from /play on purpose: /play
+            # commits to something, this only says what is on offer, so the
+            # panel can be opened and closed without a magnet being minted.
+            parts = path.split("/")
+            if len(parts) != 4:
+                self._send(400, {"ok": False, "msg": "usage: /streams/<kind>/<id>"})
+                return
+            try:
+                self._send(200, {"streams": stremio.stream_rows(parts[2], parts[3])})
+            except stremio.StremioError as e:
+                log("streams", "%s %s: %s" % (parts[2], parts[3], e))
                 self._send(502, {"ok": False, "msg": str(e)})
         elif path == "/player/state":
             self._send(200, mpvipc.state())
@@ -525,8 +549,14 @@ class Handler(BaseHTTPRequestHandler):
                 # stream URL minted now is stale in minutes, so baking one
                 # into the catalogue would guarantee a dead link by the time
                 # anyone pressed OK.
-                url, label = stremio.resolve(kind, title_id)
-                log("play", "%s %s -> %s" % (kind, title_id, label))
+                #
+                # `index` is a row from /streams — absent means "the ranking's
+                # own pick", which is what Ⓐ on the detail panel sends. It is
+                # only ever set when the owner opened the picker and chose
+                # something else, usually because the first one would not play.
+                index = body.get("index", 0)
+                url, label = stremio.resolve(kind, title_id, index)
+                log("play", "%s %s [%s] -> %s" % (kind, title_id, index, label))
                 mpvipc.load(url)
                 self._send(200, {"ok": True, "msg": label})
             except (stremio.StremioError, mpvipc.MpvError) as e:

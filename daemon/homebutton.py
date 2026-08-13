@@ -15,13 +15,25 @@ the controller is optional.
 
 Requires: python3-evdev, and the user in the `input` group
 (or run as a system service).
+
+Optional, like cecd.py, and for the same reason: without evdev there is no
+gamepad, and no gamepad is a normal state — the TV remote does this job over
+CEC and the controller is documented as optional. So a missing module is one
+line and a clean exit, not a traceback in the middle of the session log where
+it reads like the box failed to start.
 """
 
+import sys
 import time
 import urllib.request
 from select import select
 
-from evdev import InputDevice, ecodes, list_devices
+try:
+    from evdev import InputDevice, ecodes, list_devices
+except ImportError:
+    print("homebutton: python3-evdev not installed — no gamepad home button",
+          flush=True)
+    sys.exit(0)
 
 HOLD_SECONDS = 0.7
 BACKEND = "http://127.0.0.1:8484/home"
