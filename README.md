@@ -529,9 +529,20 @@ chmod +x ~/.local/bin/torrserver
 torrserver --port 8090 --path ~/.local/share/torrserver &
 ```
 
-Point elsewhere with `TORRSERVER_URL`. `curl 127.0.0.1:8090/echo` answers
-with its version when it is up, which is the quickest way to tell a dead
-TorrServer from a title with no streams.
+**The session starts it for you.** `start-session.sh` and
+`dev-session.sh` both look for a `torrserver` binary (including
+`~/.local/bin`, where a hand-installed static binary usually lands), skip
+it if something already answers on 8090, and otherwise run it with its
+cache under `~/.cache/torrserver`. Until August 2026 nothing did this, so
+a box with the binary installed still answered every Ⓐ press with
+"torrserver is not running" — an accurate message about a problem the
+session could simply have avoided.
+
+Set `TORRSERVER_URL` to point at one elsewhere; that also means "somebody
+else owns it", so the session will not start its own.
+`curl 127.0.0.1:8090/echo` answers with its version when it is up, which
+is the quickest way to tell a dead TorrServer from a title with no
+streams.
 
 **The cheapest upgrade available is a debrid account.** With a key in
 `TORRENTIO_OPTS` (e.g. `realdebrid=XXXX`), Torrentio returns direct HTTPS
@@ -640,6 +651,24 @@ If `playerctl` is missing or spotifyd has no MPRIS, the music screen says
 so plainly and the launcher stops polling rather than spawning a
 `playerctl` every few seconds for nothing.
 
+**How often it asks**, which is three states rather than two:
+
+| Where you are | What is connected | Poll |
+|---|---|---|
+| MUSIC screen | anything, or nothing | every 1 s |
+| any other screen | a player is connected | every 6 s |
+| any other screen | nothing connected | **not at all** |
+
+The last row is the point. It used to poll every 6 s forever, so a box
+with no phone paired ran `playerctl` ten times a minute all day and
+filled the journal with `No players found`. Opening MUSIC restarts the
+loop — that is the only moment a player can be discovered from a standing
+start.
+
+"Connected" means a player exists, not that it is playing: pause Spotify
+and go to TV, and the now-playing strip on the home screen stays live and
+correct.
+
 Navidrome is not wired up. The old Feishin plan died with the 1 GB
 budget and nothing has replaced it; if you want the NAS music library on
 the TV, that is still an open decision. (An Electron tile is now
@@ -664,6 +693,12 @@ flatpak install flathub com.valvesoftware.Steam
 Neither is installed by `install.sh`. If one is missing the tile says
 which and how to install it — on the TV as a toast, and in the journal
 tagged `[gaming]`.
+
+**Steam is the hard requirement; gamescope is not.** Without gamescope
+the tile still launches Big Picture directly, with a loud warning: it
+works with a controller, it just loses output resolution control, scaling
+for older titles, and window management. Without Steam there is nothing
+to open and the tile says so.
 
 **If you keep a `server/config.local.json`, the GAMING entry has to be in
 it.** That file wins over `config.json` key by key, so an empty `apps`
@@ -766,6 +801,34 @@ On Debian/Ubuntu: `sudo apt install cage chromium mpv foot`.
 `--vm` points the backend at `server/config.vm.json` through the
 `HTPC_CONFIG` environment variable, so it never overwrites a deployed
 `config.json`.
+
+### Why the dev session does not composite
+
+**The nested kiosk cannot put the page over the video, and it does not
+pretend to.** Chromium under cage logs `Server doesn't support
+zcr_alpha_compositing_v1` and never gets an alpha channel, so the TV
+screen's transparent body composites against nothing and renders as the
+browser's **white** default — over a stream that is playing perfectly
+well behind it. A white screen reads as a crash, which makes it the worst
+of the available failures.
+
+So when `dev-session.sh` nests, it does two things:
+
+- sets `HTPC_UI_TRANSPARENT=0`, so the TV screen is opaque black with a
+  readable channel bar and list instead of white;
+- runs **mpv on the host desktop** in its own window rather than inside
+  cage (`HTPC_NO_MPV=1` tells `start-session.sh` to leave mpv alone).
+
+You end up with the UI in the cage window and the picture in a window
+beside it. That is not the product, but it is the only arrangement in
+which live TV can be developed on this machine. `HTPC_NEST_MPV=1` puts
+mpv back inside cage if you want to test the real path.
+
+A real kiosk boot still defaults to transparent — **that remains the one
+load-bearing unproven piece of the architecture**, and it is now known to
+fail in at least one real configuration rather than merely being
+untested. Force it off anywhere with `HTPC_UI_TRANSPARENT=0`, or add
+`?opaque=1` to the URL for a quick look.
 
 If cage or chromium are missing the script falls back to **backend-only**:
 it starts the idle mpv and the backend, and you open

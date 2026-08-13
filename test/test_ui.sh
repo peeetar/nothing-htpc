@@ -166,6 +166,10 @@ has  "channel number in dot-matrix"    'aria-label="101"'
 has  "channel name from fixtures"      "MRT 1"
 has  "clock in the bar"                'id="chanclock"'
 has  "the list is discoverable"        'id="barhint"'
+# The TV screen only goes transparent where the compositor can actually blend
+# it over mpv. Where it cannot, a transparent body paints the browser's WHITE
+# default over a healthy stream — so the body must stay opaque unless told.
+hasnt "body is not transparent here"    'class="transparent"'
 # The list is summoned, not arrived at — entering TV shows the picture.
 hasnt "channel list closed on entry"    'id="chanlist" class="on"'
 

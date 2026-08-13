@@ -466,6 +466,60 @@ def free_port():
     return port
 
 
+class TestUITransparency(unittest.TestCase):
+    """Whether the page is composited over mpv is a property of the session,
+    so the backend reports it and the page never guesses.
+
+    This exists because guessing produced the worst possible failure: under a
+    nested cage Chromium's surface stays opaque, so the TV screen's
+    transparent body rendered as the browser's WHITE default over a stream
+    that was decoding perfectly well behind it. White reads as a crash.
+    """
+
+    def _config(self, env_value):
+        env = dict(os.environ)
+        if env_value is None:
+            env.pop("HTPC_UI_TRANSPARENT", None)
+        else:
+            env["HTPC_UI_TRANSPARENT"] = env_value
+        port = free_port()
+        env["HTPC_PORT"] = str(port)
+        proc = subprocess.Popen(
+            [sys.executable, str(HTPC_DIR / "server" / "server.py")],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            for _ in range(100):
+                try:
+                    with urllib.request.urlopen(
+                            "http://127.0.0.1:%d/config" % port, timeout=5) as r:
+                        return json.loads(r.read())
+                except Exception:
+                    time.sleep(0.05)
+            raise AssertionError("server did not start")
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+    def test_transparent_by_default(self):
+        """The architecture's intent, and what a real kiosk boot should get."""
+        self.assertIs(self._config(None)["ui"]["transparent"], True)
+
+    def test_zero_turns_it_off(self):
+        """dev-session.sh sets this when it nests, because that is exactly
+        where Chromium cannot get an alpha channel."""
+        self.assertIs(self._config("0")["ui"]["transparent"], False)
+
+    def test_it_is_runtime_state_not_stored_config(self):
+        """It describes the session, not the box, and changes between a kiosk
+        boot and a nested dev run — so it must never be written to
+        config.json, where it would outlive the session that was true for."""
+        cfg = json.loads((HTPC_DIR / "server" / "config.json").read_text())
+        self.assertNotIn("ui", cfg)
+
+
 class TestServerHTTP(unittest.TestCase):
     """Starts the real server.py and talks to it over loopback."""
 

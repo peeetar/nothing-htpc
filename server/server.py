@@ -243,9 +243,31 @@ def music_art():
     return data, ctype
 
 
+# Does the compositor actually put this page over mpv?
+#
+# The architecture rests on a transparent Chromium composited above an idle
+# mpv, and that is not something the page can find out for itself. Measured on
+# 13 August 2026: under a nested cage, Chromium logs "Server doesn't support
+# zcr_alpha_compositing_v1" and its surface stays opaque — so a transparent
+# body composites against nothing and renders as the browser's WHITE default.
+# The TV screen was white with a perfectly healthy stream playing behind it,
+# which is the worst possible failure because it reads as a crash.
+#
+# So it becomes a switch rather than an assumption. `1` keeps the intended
+# behaviour; `0` makes the TV view opaque, which loses the video but keeps a
+# readable, obviously-working UI. dev-session.sh sets 0 when it nests, because
+# that is exactly where it is known not to work.
+UI_TRANSPARENT = os.environ.get("HTPC_UI_TRANSPARENT", "1") not in ("", "0")
+
+
 def load_config():
     with open(CONFIG_PATH) as f:
-        return json.load(f)
+        cfg = json.load(f)
+    # Runtime facts the page cannot discover, merged over the file. Not stored
+    # in config.json: this is a property of the session it is running in, not
+    # of the box, and it changes between a kiosk boot and a nested dev run.
+    cfg["ui"] = {"transparent": UI_TRANSPARENT}
+    return cfg
 
 
 def kill_current():

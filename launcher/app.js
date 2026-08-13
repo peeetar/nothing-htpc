@@ -191,6 +191,15 @@ function showToast(msg, ms = 2200) {
 let view = "home";
 const VIEW_STACK = [];
 
+/* Is this page actually composited over the video? Under fixtures there is no
+   mpv to show through; ?opaque=1 is the manual override; otherwise the
+   backend says, because only the session knows what compositor it is under. */
+const FORCE_OPAQUE = new URLSearchParams(location.search).has("opaque");
+function canComposite() {
+  if (FIXTURES || FORCE_OPAQUE) return false;
+  return cfg?.ui?.transparent !== false;
+}
+
 function showView(name, { push = true } = {}) {
   if (view === name) return;
   const from = document.getElementById(view + "view");
@@ -198,10 +207,14 @@ function showView(name, { push = true } = {}) {
   if (push) VIEW_STACK.push(view);
   view = name;
 
-  /* TV is the one view that lets mpv through. Under fixtures there is no
-     mpv, and a transparent body renders as the browser's white default —
-     so the dev flag keeps it black and the bar stays readable. */
-  document.body.classList.toggle("transparent", name === "tv" && !FIXTURES);
+  /* TV is the one view that lets mpv through — but only where the compositor
+     actually blends this page over mpv. Where it does not, a transparent body
+     renders as the browser's WHITE default over a stream that is playing
+     perfectly well behind it, which reads as a crash rather than as a missing
+     feature. So it is a capability, not an assumption: the backend reports it
+     (HTPC_UI_TRANSPARENT), fixtures never want it, and ?opaque=1 forces it off
+     for a quick look. */
+  document.body.classList.toggle("transparent", name === "tv" && canComposite());
 
   to.style.display = "flex";
   to.classList.add("front");
@@ -224,7 +237,9 @@ function goBack() {
 }
 
 function onEnterView(name) {
-  if (name === "music") pollMusic();
+  // Opening MUSIC is the one moment a player can be found from a standing
+  // start, so it both polls now and restarts the loop the idle state stopped.
+  if (name === "music") { pollMusic(); musicLoop(); }
   if (name === "tv") { tvEnter(); }
   if (name === "news") newsEnter();
   if (name === "weather") weatherEnter();
@@ -1518,7 +1533,12 @@ const npEl = document.getElementById("nowplaying");
 const npText = document.getElementById("nptext");
 
 const music = { available: true, playing: false, trackKey: "", title: "",
-                length: 0, posBase: 0, posAt: 0, seq: null };
+                length: 0, posBase: 0, posAt: 0, seq: null,
+                // Is there a player at all — not "is it playing". A paused
+                // Spotify session is still connected and still worth showing
+                // on the home strip, so this is what keeps the poll alive
+                // once you leave the music view.
+                connected: false, looping: false };
 
 function mmss(s) {
   s = Math.max(0, Math.floor(s || 0));
@@ -1577,6 +1597,7 @@ function applyMusic(s) {
   music.seq = s.home_seq;
   music.available = s.available !== false;
   music.playing = !!s.playing;
+  music.connected = music.available && !!s.status;
   document.getElementById("mhead").textContent = copy("music.header");
 
   if (!music.available) {
@@ -1642,9 +1663,37 @@ async function pollMusic() {
       .then(r => r.json()));
   } catch (_) {}
 }
+/* When to ask playerctl again, and when to stop asking.
+
+   Three states, because "is spotifyd there" and "is anything playing" are
+   different questions and only one of them is worth a subprocess every few
+   seconds:
+
+     on the music view   1s — the progress bar is being watched
+     connected, off-view 6s — something is playing (or paused); the home
+                              strip shows it, so it has to stay current
+     idle, off-view      stop entirely
+
+   The last one is the fix: the old loop polled every 6s forever, so a box
+   with no phone connected ran `playerctl` ten times a minute all day and
+   filled the journal with "No players found". Entering the music view
+   restarts it, which is the only moment a player can be discovered from a
+   standing start. */
+function musicDelay() {
+  if (view === "music") return 1000;
+  return music.connected ? 6000 : 0;      // 0 = stop
+}
+
 function musicLoop() {
-  if (FIXTURES || !music.available) return;
-  setTimeout(async () => { await pollMusic(); musicLoop(); }, view === "music" ? 1000 : 6000);
+  if (FIXTURES || !music.available || music.looping) return;
+  music.looping = true;
+  const tick = async () => {
+    await pollMusic();
+    const next = musicDelay();
+    if (!next || !music.available) { music.looping = false; return; }
+    setTimeout(tick, next);
+  };
+  setTimeout(tick, musicDelay() || 6000);
 }
 async function musicCmd(cmd) {
   if (FIXTURES) return;

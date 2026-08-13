@@ -43,20 +43,29 @@ if [ -z "$STEAM" ] && command -v flatpak >/dev/null; then
   fi
 fi
 
-if [ -z "$GAMESCOPE" ]; then
-  say "gamescope is not installed — the GAMING tile needs it to give Steam a"
-  say "fullscreen surface and controller focus inside the kiosk."
-  say "  Fedora: sudo dnf install gamescope"
-  say "  Debian: sudo apt install gamescope"
-  exit 127
-fi
-
+# Steam is the hard requirement; gamescope is not.
+#
+# Exiting 127 when only gamescope was missing meant the tile did nothing at
+# all on a box that had a perfectly good Steam installed — the strictly worse
+# of the two outcomes, since bare Steam in Big Picture is still usable with a
+# controller, it just gets no resolution control and hands its window
+# management to a compositor that has none. So a missing gamescope is now a
+# loud warning and a degraded launch, and only a missing Steam is fatal.
 if [ -z "$STEAM" ]; then
-  say "Steam is not installed."
+  say "Steam is not installed — there is nothing for the GAMING tile to open."
   say "  Fedora: sudo dnf install steam        (needs RPM Fusion nonfree)"
   say "  Debian: sudo apt install steam"
   say "  Either: flatpak install flathub com.valvesoftware.Steam"
   exit 127
+fi
+
+if [ -z "$GAMESCOPE" ]; then
+  say "WARNING: gamescope is not installed — launching Steam directly."
+  say "Big Picture will still work, but without gamescope there is no output"
+  say "resolution control, no scaling for older titles, and window management"
+  say "is left to a kiosk compositor that has none. Install it:"
+  say "  Fedora: sudo dnf install gamescope"
+  say "  Debian: sudo apt install gamescope"
 fi
 
 # --- how it is run -----------------------------------------------------------
@@ -89,11 +98,21 @@ case "$STEAM" in
   *)             STEAM_CMD=("$STEAM" -gamepadui) ;;
 esac
 
-say "gamescope: $(command -v "$GAMESCOPE")"
 say "steam:     $STEAM"
-say "output:    ${W}x${H}@${REFRESH}"
-say "launching: $GAMESCOPE ${GS_ARGS[*]} -- ${STEAM_CMD[*]}"
+if [ -n "$GAMESCOPE" ]; then
+  say "gamescope: $(command -v "$GAMESCOPE")"
+  say "output:    ${W}x${H}@${REFRESH}"
+  say "launching: $GAMESCOPE ${GS_ARGS[*]} -- ${STEAM_CMD[*]}"
+else
+  say "gamescope: none — degraded launch"
+  say "launching: ${STEAM_CMD[*]}"
+fi
 
-# exec so that server.py's kill lands on gamescope itself rather than on a
-# shell that would leave it orphaned and still holding the display.
-exec "$GAMESCOPE" "${GS_ARGS[@]}" -- "${STEAM_CMD[@]}"
+# exec so that server.py's kill lands on the compositor (or on Steam itself)
+# rather than on a shell that would leave it orphaned and still holding the
+# display.
+if [ -n "$GAMESCOPE" ]; then
+  exec "$GAMESCOPE" "${GS_ARGS[@]}" -- "${STEAM_CMD[@]}"
+else
+  exec "${STEAM_CMD[@]}"
+fi

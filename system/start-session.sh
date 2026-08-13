@@ -84,10 +84,48 @@ if [ -n "${HTPC_MPV_VO_ARGS:-}" ]; then
   echo "session | mpv video output overridden: $HTPC_MPV_VO_ARGS"
 fi
 
-if command -v mpv >/dev/null; then
+# HTPC_NO_MPV=1 means somebody has already started one and handed us the
+# socket — dev-session.sh does this so the picture lands in its own window on
+# the host desktop, where a nested cage cannot composite the page over it.
+if [ -n "${HTPC_NO_MPV:-}" ]; then
+  echo "session | mpv left to the caller (HTPC_NO_MPV) on $MPV_IPC_SOCKET"
+elif command -v mpv >/dev/null; then
   tag mpv mpv "${MPV_ARGS[@]}"
 else
   echo "session | mpv is not installed — TV and MOVIES will not play" >&2
+fi
+
+# --- TorrServer -------------------------------------------------------------
+#
+# MOVIES and SHOWS resolve a magnet and then need something to turn it into an
+# HTTP stream. That something is TorrServer, and until August 2026 nothing
+# started it — so a box with the binary sitting in ~/.local/bin still answered
+# every Ⓐ press with "torrserver is not running on 127.0.0.1:8090", which is
+# an accurate message about a problem the session could simply have avoided.
+#
+# Optional and non-fatal: live TV, news, weather and music do not touch it.
+# Probed rather than assumed (constraint 25) — it is usually a hand-installed
+# static binary, so ~/.local/bin is as likely as /usr/local/bin.
+if [ -z "${TORRSERVER_URL:-}" ]; then
+  TORRSERVER=""
+  for t in torrserver TorrServer "$HOME/.local/bin/torrserver" /usr/local/bin/torrserver; do
+    if command -v "$t" >/dev/null 2>&1; then TORRSERVER="$t"; break; fi
+  done
+  if [ -n "$TORRSERVER" ]; then
+    # Already up from a previous session or a unit? Leave it alone — two of
+    # them fight over port 8090 and the second one dies noisily.
+    if curl -sf -m 2 -o /dev/null "http://127.0.0.1:8090/echo" 2>/dev/null; then
+      echo "session | torrserver already running on 127.0.0.1:8090"
+    else
+      TORRSERVER_DIR="${HTPC_TORRSERVER_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/torrserver}"
+      mkdir -p "$TORRSERVER_DIR"
+      tag torrserver "$TORRSERVER" --port 8090 --path "$TORRSERVER_DIR"
+      echo "session | torrserver starting, cache in $TORRSERVER_DIR"
+    fi
+  else
+    echo "session | torrserver not installed — MOVIES and SHOWS cannot play" \
+         "(see README; live TV, news, weather and music are unaffected)"
+  fi
 fi
 
 # Backend (launches/kills apps, and bridges the page to mpv's IPC socket)

@@ -239,6 +239,38 @@ if [ "$CHECK_ONLY" = 1 ]; then
 fi
 
 # --- run --------------------------------------------------------------------
+# TorrServer, started here rather than by start-session.sh so that cleanup can
+# kill exactly the process this script started instead of pattern-matching for
+# somebody else's. Exporting TORRSERVER_URL is what tells start-session.sh to
+# leave it alone. Optional: only MOVIES and SHOWS need it.
+start_torrserver() {
+  [ -n "${TORRSERVER_URL:-}" ] && return 0
+  local t found=""
+  for t in torrserver TorrServer "$HOME/.local/bin/torrserver" /usr/local/bin/torrserver; do
+    if command -v "$t" >/dev/null 2>&1; then found="$t"; break; fi
+  done
+  if [ -z "$found" ]; then
+    warn "torrserver not installed — MOVIES and SHOWS will have nowhere to stream from"
+    return 0
+  fi
+  if curl -sf -m 2 -o /dev/null "http://127.0.0.1:8090/echo" 2>/dev/null; then
+    ok "torrserver already running on 127.0.0.1:8090"
+    export TORRSERVER_URL="http://127.0.0.1:8090"
+    return 0
+  fi
+  local dir="${HTPC_TORRSERVER_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/torrserver}"
+  mkdir -p "$dir"
+  "$found" --port 8090 --path "$dir" \
+    2>&1 | while IFS= read -r line; do printf 'torrserver | %s\n' "$line"; done &
+  # $! is the READER at the end of the pipe, not torrserver — killing it on
+  # the way out left a TorrServer holding port 8090, so the next run found
+  # "something already answering" and never started its own. The command line
+  # is what has to be matched, and this one is specific to this session.
+  DEV_TORRSERVER_MATCH="$found --port 8090 --path $dir"
+  export TORRSERVER_URL="http://127.0.0.1:8090"
+  ok "torrserver  ${D}$found — cache in $dir${Z}"
+}
+
 if [ "$KIOSK" = 0 ]; then
   say
   say "  Fedora: sudo dnf install cage chromium mpv foot"
@@ -276,6 +308,8 @@ if [ "$KIOSK" = 0 ]; then
     warn "mpv not installed — TV and MOVIES will resolve a stream and have nowhere to put it"
   fi
 
+  start_torrserver
+
   say
   say "Backend-only — open http://127.0.0.1:8484 in a browser."
   say "(Gamepad, weather and the whole UI work there, and video plays in mpv's"
@@ -305,6 +339,39 @@ if [ -n "${WAYLAND_DISPLAY:-}" ]; then
   export HTPC_MPV_VO_ARGS="${HTPC_MPV_VO_ARGS:---vo=gpu --gpu-api=opengl --gpu-context=wayland --hwdec=no}"
   say "  mpv              $HTPC_MPV_VO_ARGS"
   say "                   ${D}software path — the nested GPU is not usable${Z}"
+
+  # The layering does not work here, and pretending otherwise costs an hour.
+  #
+  # Chromium's surface stays opaque under cage — it logs "Server doesn't
+  # support zcr_alpha_compositing_v1" and never gets an alpha channel — so the
+  # transparent body the TV screen relies on composites against nothing and
+  # renders as the browser's WHITE default. Measured 13 Aug 2026: a perfectly
+  # healthy Sitel stream decoding at 854x480 behind a plain white screen,
+  # which reads as a crash rather than as a missing feature.
+  #
+  # Two consequences, both set here rather than left to be rediscovered:
+  export HTPC_UI_TRANSPARENT="${HTPC_UI_TRANSPARENT:-0}"
+  say "  ui               opaque (nested cage cannot composite over mpv)"
+
+  # ...and since the page cannot be seen through, mpv is run OUT here on the
+  # host desktop instead of inside cage, in its own window. Both are then
+  # visible at once: the UI in the cage window, the picture beside it. That is
+  # not the product, but it is the only arrangement in which live TV can
+  # actually be developed on this machine.
+  if [ "${HTPC_NEST_MPV:-0}" = 0 ] && command -v mpv >/dev/null; then
+    export MPV_IPC_SOCKET="${MPV_IPC_SOCKET:-${XDG_RUNTIME_DIR:-/tmp}/htpc-mpv.sock}"
+    export HTPC_NO_MPV=1          # start-session.sh then leaves mpv alone
+    rm -f "$MPV_IPC_SOCKET"
+    mpv --idle=yes --input-ipc-server="$MPV_IPC_SOCKET" \
+        --force-window=yes --keep-open=no \
+        --no-osc --no-osd-bar --osd-level=0 \
+        --title="nothing-htpc video (dev)" \
+        --script="$HTPC_DIR/cabletv/shim.lua" \
+        --background-color='#000000' \
+        2>&1 | while IFS= read -r line; do printf 'mpv | %s\n' "$line"; done &
+    DEV_MPV_PID=$!
+    say "  video            ${D}mpv in its own window on the host — see it beside the kiosk${Z}"
+  fi
 fi
 
 # start-session.sh backgrounds its daemons, so when cage goes away they are
@@ -325,12 +392,26 @@ cleanup() {
   for p in server/server.py daemon/homebutton.py daemon/cecd.py; do
     pkill -KILL -f -- "$HTPC_DIR/$p" 2>/dev/null
   done
+  # The host-side mpv and TorrServer this script started, if any. The socket
+  # goes too: it outlives the process, and a stale one reports a broken player
+  # rather than an absent one (constraint 27).
+  if [ -n "${DEV_MPV_PID:-}" ]; then
+    kill "$DEV_MPV_PID" 2>/dev/null
+    pkill -f -- "--input-ipc-server=${MPV_IPC_SOCKET:-}" 2>/dev/null
+    rm -f "${MPV_IPC_SOCKET:-}"
+    say "  stopped mpv"
+  fi
+  if [ -n "${DEV_TORRSERVER_MATCH:-}" ]; then
+    pkill -f -- "$DEV_TORRSERVER_MATCH" 2>/dev/null && say "  stopped torrserver"
+  fi
   say ""
   hdr "session ended"
   [ "$QUIET" = 0 ] && say "  full log: $LOG"
   return 0
 }
 trap cleanup EXIT
+
+start_torrserver
 
 hdr "session output  ${D}(name | line)${Z}"
 cage -- "$HTPC_DIR/system/start-session.sh"
