@@ -1,5 +1,9 @@
 
-CLAUDE.md
+# CLAUDE.md is TRACKED. It was ignored until 20 August 2026, which meant the
+# constraints file that run-all.sh, install.sh, start-session.sh, tmdb.py and
+# test_backend.py all cite by number ("constraint 7", "constraint 25") did not
+# survive a clone — every one of those comments pointed at a file the deployed
+# checkout did not have.
 __pycache__/
 *.pyc
 
