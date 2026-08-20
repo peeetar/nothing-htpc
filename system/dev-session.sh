@@ -122,7 +122,12 @@ fi
 # cage execs this directly, so a missing exec bit kills the session before a
 # single line is printed — and git only carries the bit if it was committed.
 if [ ! -x "$HTPC_DIR/system/start-session.sh" ]; then
-  if chmod +x "$HTPC_DIR/system/start-session.sh" 2>/dev/null; then
+  if [ "$CHECK_ONLY" = 1 ]; then
+    # --check says it starts nothing and changes nothing. Repairing the mode
+    # here made that a lie, so under --check this is a finding, not a fix.
+    bad "start-session.sh is not executable — cage cannot start it"
+    say "     ${D}fix: chmod +x system/start-session.sh (and git update-index --chmod=+x)${Z}"
+  elif chmod +x "$HTPC_DIR/system/start-session.sh" 2>/dev/null; then
     warn "start-session.sh was not executable — fixed (commit the mode: git update-index --chmod=+x)"
   else
     bad "start-session.sh is not executable and chmod failed — cage cannot start it"
@@ -211,6 +216,22 @@ for bin in mpv playerctl foot spotifyd; do
     warn "$bin not installed"
   fi
 done
+
+# TorrServer is not on PATH under its own name on most boxes, so it needs the
+# same four-place probe start_torrserver uses rather than the loop above.
+# --check used to say nothing about it at all, which meant a preflight could
+# come back clean on a box where MOVIES and SHOWS could not play a thing.
+TS_FOUND=""
+for t in torrserver TorrServer "$HOME/.local/bin/torrserver" /usr/local/bin/torrserver; do
+  command -v "$t" >/dev/null 2>&1 && TS_FOUND="$(command -v "$t")" && break
+done
+if [ -n "${TORRSERVER_URL:-}" ]; then
+  ok "torrserver  ${D}TORRSERVER_URL=$TORRSERVER_URL — somebody else owns it${Z}"
+elif [ -n "$TS_FOUND" ]; then
+  ok "torrserver  ${D}$TS_FOUND${Z}"
+else
+  warn "torrserver not installed — MOVIES and SHOWS cannot play (sudo system/install.sh)"
+fi
 
 # --- environment ------------------------------------------------------------
 hdr "environment"

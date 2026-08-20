@@ -158,4 +158,11 @@ def state():
         "cache": get("cache-buffering-state") or 0,
         "path": get("path"),
         "title": get("media-title"),
+        # shim.lua's half of the conversation. It publishes {failed, attempts,
+        # url} on user-data/htpc and its comment has always said "server.py
+        # reads it in the same round trip" — which was not true until 20
+        # August 2026: nothing here fetched it, so the shim's failure and
+        # retry reporting had no consumer and a dead channel looked to the UI
+        # exactly like a healthy one. None when the shim is not loaded.
+        "shim": get("user-data/htpc"),
     }

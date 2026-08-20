@@ -99,6 +99,23 @@ dom "&view=grid&kind=movie&sel=32"
 has  "second page rendered"            "PAGE 2/2"
 has  "an item only on page 2"          "Anora"
 
+# MOVIES and SHOWS are one view switched by kind. Until August 2026 the
+# "already loaded" flag was per-kind while the item list was shared, so the
+# third step of this walk skipped the reset and drew the shows list under the
+# MOVIES title.
+echo "MOVIES / SHOWS — switching catalogues"
+# Three steps, not two: the second visit to a catalogue is the one that used
+# to skip its reset and render whatever the other one had left behind.
+dom "&view=grid&kind=movie&then=series,movie"
+has  "back on the MOVIES title"        'aria-label="MOVIES"'
+has  "showing films"                   "Dune: Part Two"
+hasnt "not the series list"             "Severance"
+
+dom "&view=grid&kind=series&then=movie,series"
+has  "back on the SHOWS title"         'aria-label="SHOWS"'
+has  "showing series"                  "Severance"
+hasnt "not the film list"               "Dune: Part Two"
+
 echo "MOVIE DETAIL"
 dom "&view=grid&kind=movie&detail=1"; shot detail "&view=grid&kind=movie&detail=1"
 has  "detail panel open"               'id="detail" class="on"'
@@ -184,6 +201,27 @@ has  "channel numbers as dots"         'aria-label="103"'
 has  "channel names"                   "KANAL 5"
 has  "position counter"                'id="chancount"'
 
+# The TV screen is the passthrough surface for everything mpv plays, not just
+# the dial. A successful /play lands here with the dial standing down — and it
+# has to, because tvShow()'s debounced tvLoad() would otherwise tune a channel
+# over the film 450 ms after it started, which is why a film never played to
+# the end before August 2026.
+echo "TV — a film playing (on demand, not the dial)"
+dom "&view=tv&playing=Dune%3A%20Part%20Two"; shot ondemand "&view=tv&playing=Dune%3A%20Part%20Two"
+has  "channel bar shown"               'id="chanbar" class="show"'
+has  "the title, in the body font"     "Dune: Part Two"
+has  "labelled as now playing"         "NOW PLAYING"
+hasnt "no channel number on the bar"    'aria-label="101"'
+hasnt "no channel name on the bar"      "MRT 1"
+hasnt "not showing a loading state"     'id="chanstate" class="on"'
+
+echo "TV — the list over a film marks no channel live"
+dom "&view=tv&playing=Dune&list=1"
+has  "channel list open"               'id="chanlist" class="on"'
+has  "a channel row"                   'class="chanrow'
+# Red marks state, never focus. Nothing is on the dial, so nothing is red.
+hasnt "no row is marked live"           "chanrow sel live"
+
 echo "NEWS"
 dom "&view=news"; shot news "&view=news"
 has  "Time.mk half"                    "TIME.MK"
@@ -231,6 +269,119 @@ if printf '%s' "$DOM" | grep -qF -- "--layout-grid-columns: 4"; then
   echo "  ok   lite narrows the grid to 4 columns"; pass=$((pass + 1))
 else
   echo "  FAIL lite did not override grid-columns"; fail=$((fail + 1))
+fi
+
+# --- self-healing --------------------------------------------------------
+# The only section that talks to a *backend* rather than fixtures, because
+# what it tests is what the page does when the backend is failing. It has to
+# be port 8484: app.js pins BACKEND there unless it is served from it.
+#
+# The bug: newsLoaded/wxLoaded were set even when every fetch failed, and
+# neither screen refreshed — so a box that reached the launcher before DHCP
+# settled showed BACKEND OFFLINE for as long as it stayed up, recoverable
+# only by a page reload nobody at a sofa can ask for.
+echo "SELF-HEALING — a screen that failed to load tries again"
+if python3 -c "
+import socket
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try: s.bind(('127.0.0.1', 8484))
+finally: s.close()
+" 2>/dev/null; then
+  STUBFILE="$(mktemp)"
+  cat > "$STUBFILE" <<'NEWSSTUB'
+# argv[2] = 'always' (every /news request fails) or 'first3' (the first
+# visit's three requests fail, then it answers).
+import http.server, os, json, sys
+MODE = sys.argv[2]
+N = [0]
+class H(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith('/news'):
+            N[0] += 1
+            if MODE == 'always' or N[0] <= 3:
+                self.send_error(502, 'upstream down'); return
+            b = json.dumps({'items': [{'title': 'RECOVERED HEADLINE'}]}).encode()
+            self.send_response(200); self.send_header('content-type', 'application/json')
+            self.send_header('content-length', str(len(b))); self.end_headers(); self.wfile.write(b)
+            return
+        if self.path.startswith('/player/state'):
+            # 'dead' is a stream shim.lua has given up on; 'playing' is a
+            # healthy picture. Everything else here does not reach this path.
+            st = {'available': True, 'idle': False, 'paused': False,
+                  'position': 0, 'duration': 0, 'buffering': False, 'cache': 0,
+                  'path': 'http://x/y', 'title': 'y',
+                  'shim': {'failed': True, 'attempts': 2, 'url': 'http://x/y'}}
+            if MODE == 'playing':
+                st.update(position=41.5, duration=3600, cache=100,
+                          shim={'failed': False, 'attempts': 0, 'url': 'http://x/y'})
+            b = json.dumps(st).encode()
+            self.send_response(200); self.send_header('content-type', 'application/json')
+            self.send_header('content-length', str(len(b))); self.end_headers(); self.wfile.write(b)
+            return
+        super().do_GET()
+    def log_message(self, *a): pass
+os.chdir(sys.argv[1])
+http.server.HTTPServer(('127.0.0.1', 8484), H).serve_forever()
+NEWSSTUB
+
+  # A feed that never comes back: the screen has to say so, every time.
+  python3 "$STUBFILE" "$HTPC_DIR/launcher" always >/dev/null 2>&1 &
+  STUB=$!
+  sleep 1
+  DOM="$($CHROME --headless --disable-gpu --no-sandbox --hide-scrollbars \
+          --virtual-time-budget=15000 --dump-dom \
+          "http://127.0.0.1:8484/index.html?view=news" 2>/dev/null)"
+  has  "says so while the feed is down"  "BACKEND OFFLINE"
+  kill $STUB 2>/dev/null; wait $STUB 2>/dev/null; sleep 0.5
+
+  # A feed that fails the first visit and then answers. Counted rather than
+  # timed: --virtual-time-budget fast-forwards the page's timers and leaves a
+  # wall clock behind, so "for the first N seconds" means nothing here.
+  python3 "$STUBFILE" "$HTPC_DIR/launcher" first3 >/dev/null 2>&1 &
+  STUB=$!
+  sleep 1
+  # &revisit=N leaves the screen and comes back — what a person does when
+  # something did not load, and the route to the retry-on-entry path.
+  DOM="$($CHROME --headless --disable-gpu --no-sandbox --hide-scrollbars \
+          --virtual-time-budget=20000 --dump-dom \
+          "http://127.0.0.1:8484/index.html?view=news&revisit=1" 2>/dev/null)"
+  has  "recovers once the feed answers"  "RECOVERED HEADLINE"
+  # No "and the offline row is gone" assertion: this stub serves no /config
+  # either, so the page's own offline toast is legitimately on screen and a
+  # flat DOM grep cannot tell it from a news row.
+
+  kill $STUB 2>/dev/null; wait $STUB 2>/dev/null; sleep 0.5
+
+  # What the picture is doing. All of this existed and none of it was wired:
+  # /player/state had no caller, shim.lua published {failed, attempts, url}
+  # that nothing read, and copy("state.buffering") was unreachable. Measured
+  # 20 August 2026: a film whose torrent had a dead swarm reported success,
+  # switched to the TV screen and sat on black with nothing to say why.
+  echo "TV — what the picture is actually doing"
+  python3 "$STUBFILE" "$HTPC_DIR/launcher" dead >/dev/null 2>&1 &
+  STUB=$!
+  sleep 1
+  DOM="$($CHROME --headless --disable-gpu --no-sandbox --hide-scrollbars \
+          --virtual-time-budget=12000 --dump-dom \
+          "http://127.0.0.1:8484/index.html?view=tv&playing=A%20Dead%20Stream" 2>/dev/null)"
+  has  "a dead stream says so"           'id="chanstate" class="on"'
+  has  "and says which way it is dead"   "NO SIGNAL"
+  kill $STUB 2>/dev/null; wait $STUB 2>/dev/null; sleep 0.5
+
+  python3 "$STUBFILE" "$HTPC_DIR/launcher" playing >/dev/null 2>&1 &
+  STUB=$!
+  sleep 1
+  DOM="$($CHROME --headless --disable-gpu --no-sandbox --hide-scrollbars \
+          --virtual-time-budget=12000 --dump-dom \
+          "http://127.0.0.1:8484/index.html?view=tv&playing=A%20Working%20Stream" 2>/dev/null)"
+  # The one thing worse than saying nothing over a dead picture is saying
+  # something over a live one.
+  hasnt "a healthy picture is left alone" 'id="chanstate" class="on"'
+
+  kill $STUB 2>/dev/null
+  rm -f "$STUBFILE"
+else
+  echo "  SKIP: port 8484 is in use — a session is running"
 fi
 
 echo

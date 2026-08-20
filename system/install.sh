@@ -43,9 +43,11 @@ HTPC_UID="$(id -u "$HTPC_USER")"
 
 # peerflix and webtorrent are gone with the July 2026 remodel: torrent
 # streaming is TorrServer now, a single static Go binary that no distro
-# carries. It is optional — live TV, news, weather and music all work without
-# it, only MOVIES and SHOWS need it — so it is not in this list and step 6
-# just says whether it is running. See README.md.
+# carries. It is not in the package lists for that reason — it has its own
+# step, which fetches the release binary, because "install this by hand
+# first" is not something the box can ask of whoever is using it. Only MOVIES
+# and SHOWS need it; live TV, news, weather and music are unaffected if the
+# download fails, so the step warns and carries on. See README.md.
 #
 # Two package lists, because the same software has different names in each
 # ecosystem and the box is developed on Fedora and deployed on whatever the
@@ -104,6 +106,28 @@ repo_readable() {
   else
     return 0   # cannot tell from here; --check as root will say for sure
   fi
+}
+
+# TorrServer, if this box has one. The same four places start-session.sh
+# probes, in the same order (constraint 25) — a check that finds a binary the
+# session then cannot is worse than no check.
+find_torrserver() {
+  local t
+  for t in torrserver TorrServer "$HOME/.local/bin/torrserver" /usr/local/bin/torrserver; do
+    if command -v "$t" >/dev/null 2>&1; then command -v "$t"; return 0; fi
+  done
+  return 1
+}
+
+# The release asset for this machine. TorrServer publishes one static binary
+# per arch and nothing else has to be resolved.
+torrserver_asset() {
+  case "$(uname -m)" in
+    x86_64)         echo TorrServer-linux-amd64 ;;
+    aarch64|arm64)  echo TorrServer-linux-arm64 ;;
+    armv7l|armv6l)  echo TorrServer-linux-arm7 ;;
+    *)              echo "" ;;
+  esac
 }
 
 boot_config() {
@@ -172,8 +196,14 @@ if [ "$CHECK" = 1 ]; then
 
   step "Install"
   ok "repo: $REPO"
-  for f in server/server.py launcher/index.html launcher/app.js \
+  # Every file the session actually opens. The short version of this list
+  # passed a checkout with no stremio.py in it, which then 500s on MOVIES —
+  # a manifest that only names the entry point is not a manifest.
+  for f in server/server.py server/channels.py server/feeds.py \
+           server/mpvipc.py server/stremio.py server/tmdb.py \
+           launcher/index.html launcher/app.js \
            launcher/theme.js launcher/theme.json system/start-session.sh \
+           system/gamescope-session.sh \
            daemon/homebutton.py daemon/cecd.py cabletv/shim.lua \
            cabletv/channels.m3u; do
     [ -f "$REPO/$f" ] && ok "$f" || bad "$f missing from the checkout"
@@ -197,6 +227,17 @@ if [ "$CHECK" = 1 ]; then
     ok "backend answering on :8484"
   else
     warn "backend not answering (expected if the session is stopped)"
+  fi
+  # Only MOVIES and SHOWS need this, so it is a warning — but a silent one is
+  # how "torrserver is not running" became the answer to every A press on a
+  # film with no hint anywhere that the box could have said so first.
+  if ts_have="$(find_torrserver)"; then
+    ok "torrserver installed: $ts_have"
+    curl -sf --max-time 2 -o /dev/null http://127.0.0.1:8090/echo \
+      && ok "torrserver answering on :8090" \
+      || warn "torrserver not answering (expected if the session is stopped)"
+  else
+    warn "torrserver not installed — MOVIES and SHOWS cannot play (re-run this installer)"
   fi
 
   step "Service identity"
@@ -237,7 +278,7 @@ echo "  repo:  $REPO  (run in place — nothing is copied)"
 echo "  user:  $HTPC_USER (uid $HTPC_UID)"
 [ "$DRY" = 1 ] && echo "  MODE:  dry run, nothing will change"
 
-step "1/6 Packages"
+step "1/7 Packages"
 case "$PM" in
   dnf)
     run dnf install -y "${PKGS[@]}"
@@ -251,7 +292,7 @@ case "$PM" in
     ;;
 esac
 
-step "2/6 Boot config"
+step "2/7 Boot config"
 cfg=$(boot_config)
 if [ -z "$cfg" ]; then
   warn "no config.txt found — not a Pi? skipping display/CEC setup"
@@ -273,7 +314,7 @@ else
   fi
 fi
 
-step "3/6 Groups and input devices"
+step "3/7 Groups and input devices"
 run usermod -aG input,video,render,audio "$HTPC_USER"
 run install -m 0644 "$REPO/system/99-htpc-input.rules" /etc/udev/rules.d/
 run bash -c "echo uinput > /etc/modules-load.d/uinput.conf"
@@ -281,7 +322,7 @@ run modprobe uinput
 run udevadm control --reload
 ok "groups + udev rules (group changes apply after reboot)"
 
-step "4/6 Files"
+step "4/7 Files"
 # Nothing is copied: the service runs this checkout where it stands. All this
 # step has to guarantee is that the bits git does not reliably carry (exec
 # permissions) are set, and that the session user can actually get here.
@@ -300,7 +341,7 @@ if [ -f "$REPO/server/config.local.json" ]; then
   ok "server/config.local.json present — it overrides config.json and git ignores it"
 fi
 
-step "5/6 Service"
+step "5/7 Service"
 # Rewrite the three machine-specific lines rather than trusting the checked-in
 # defaults: a username/uid mismatch is the 217/USER crash-loop in the README,
 # and ExecStart is the only place that records where the repo lives.
@@ -320,7 +361,43 @@ run systemctl disable getty@tty1
 run systemctl enable htpc-session
 run systemctl set-default graphical.target
 
-step "6/6 SD card wear"
+step "6/7 TorrServer"
+# MOVIES and SHOWS resolve a magnet and then need something to turn it into
+# an HTTP stream. Without a debrid key that something has to run on the box,
+# and no distro packages it — so until this step existed, a fresh install
+# answered every A press on a film with "torrserver is not running". Accurate,
+# and useless to anyone without a terminal.
+#
+# Non-fatal on purpose: this is the one step that needs the network to reach
+# GitHub, and live TV, news, weather, music and gaming do not care whether it
+# worked. A failure here warns and the install continues.
+if ts_have="$(find_torrserver)"; then
+  ok "torrserver already installed: $ts_have"
+elif [ -z "$(torrserver_asset)" ]; then
+  warn "no TorrServer build for $(uname -m) — MOVIES and SHOWS will not play"
+elif ! command -v curl >/dev/null; then
+  warn "curl missing — cannot fetch TorrServer; MOVIES and SHOWS will not play"
+elif [ "$DRY" = 1 ]; then
+  echo "    would download $(torrserver_asset) to /usr/local/bin/torrserver"
+else
+  ts_url="https://github.com/YouROK/TorrServer/releases/latest/download/$(torrserver_asset)"
+  ts_tmp="$(mktemp)"
+  # Downloaded to a temp file and only moved into place once it looks like a
+  # binary: a half-written or HTML-error-page "torrserver" on PATH is worse
+  # than none, because start-session.sh would then start it and it would fail
+  # somewhere much less obvious than here.
+  if curl -fsSL --max-time 180 -o "$ts_tmp" "$ts_url" \
+     && [ -s "$ts_tmp" ] && head -c 4 "$ts_tmp" | grep -q ELF; then
+    install -m 0755 "$ts_tmp" /usr/local/bin/torrserver
+    ok "installed /usr/local/bin/torrserver ($(du -h /usr/local/bin/torrserver | cut -f1))"
+  else
+    warn "could not fetch TorrServer from $ts_url — MOVIES and SHOWS will not"
+    warn "play until it is installed; everything else is unaffected"
+  fi
+  rm -f "$ts_tmp"
+fi
+
+step "7/7 SD card wear"
 # Chromium's cache and the systemd journal are the two things that write
 # constantly to a card that does not enjoy it.
 run mkdir -p /etc/systemd/journald.conf.d

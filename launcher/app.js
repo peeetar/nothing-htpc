@@ -240,7 +240,11 @@ function onEnterView(name) {
   // Opening MUSIC is the one moment a player can be found from a standing
   // start, so it both polls now and restarts the loop the idle state stopped.
   if (name === "music") { pollMusic(); musicLoop(); }
-  if (name === "tv") { tvEnter(); }
+  // Only the TV screen shows the picture, so it is the only one that has to
+  // know what the picture is doing. Everywhere else the poll is off entirely
+  // — the same rule the music loop follows, and for the same reason.
+  if (name !== "tv") tvPollStop();
+  if (name === "tv") { tvEnter(); tvPollStart(); }
   if (name === "news") newsEnter();
   if (name === "weather") weatherEnter();
   if (name === "grid") gridEnter();
@@ -336,13 +340,14 @@ async function loadBriefWeather() {
   }
 }
 
-let wxLoaded = false;
+let wxAt = 0;
 async function weatherEnter() {
   document.getElementById("wxhead").textContent = copy("tiles.weather");
-  if (wxLoaded) return;
+  if (!stale(wxAt)) return;
   const grid = document.getElementById("wxgrid");
   const days = THEME.layout["weather-days"] || 3;
 
+  let failed = 0;
   const rows = await Promise.all(WX_CITIES.map(async (city) => {
     let daily, now;
     if (FIXTURES) {
@@ -361,6 +366,7 @@ async function weatherEnter() {
         daily = j.daily;
         now = j.current;
       } catch (_) {
+        failed++;
         return `<div class="wxcity"><div class="wxlead"><div class="wxname">${city.name}</div>
           <div class="wxnow"><span class="cond">${copy("state.offline")}</span></div></div></div>`;
       }
@@ -401,7 +407,8 @@ async function weatherEnter() {
   }));
 
   grid.innerHTML = rows.join("");
-  wxLoaded = true;
+  // Every city offline means the network was, not that the forecast is.
+  wxAt = failed < WX_CITIES.length ? Date.now() : 0;
 }
 
 /* =========================================================
@@ -465,9 +472,19 @@ async function fetchRSS(url) {
   return r.json();
 }
 
-let newsLoaded = false;
+/* Both screens fetch once and remember *when*, not merely *that*.
+   The bug this replaces: the latch was set even when every fetch failed, and
+   neither screen had a refresh — so a box that reached the launcher before
+   DHCP settled showed BACKEND OFFLINE on NEWS and WEATHER for as long as it
+   stayed up, and the only cure was a page reload nobody at a sofa can ask
+   for. A failed load now leaves the stamp at 0, so the next visit tries
+   again, and a stale one is refetched even if it succeeded. */
+const CONTENT_TTL = 10 * 60 * 1000;
+const stale = (at) => !at || Date.now() - at > CONTENT_TTL;
+
+let newsAt = 0;
 async function newsEnter() {
-  if (newsLoaded) return;
+  if (!stale(newsAt)) return;
   const top = document.getElementById("newstop");
   const bottom = document.getElementById("newsbottom");
   const nTop = THEME.layout["news-rows-top"] || 4;
@@ -480,13 +497,16 @@ async function newsEnter() {
   top.innerHTML = head(copy("news.top-source"), "");
   bottom.innerHTML = head(copy("news.bottom-source"), copy("news.bottom-region"));
 
+  let got = 0;
   const cats = NEWS_TOP_CATS.slice(0, nTop);
   for (const c of cats) {
     let items;
-    if (FIXTURES) items = FIXTURE_HEADLINES;
+    if (FIXTURES) { items = FIXTURE_HEADLINES; got++; }
     else {
-      try { items = (await fetchRSS(`https://time.mk/rss/${c.slug}`)).items.map(i => i.title); }
-      catch (_) { items = [copy("state.offline")]; }
+      try {
+        items = (await fetchRSS(`https://time.mk/rss/${c.slug}`)).items.map(i => i.title);
+        got++;
+      } catch (_) { items = [copy("state.offline")]; }
     }
     top.insertAdjacentHTML("beforeend", marqueeRow(c.label, items));
   }
@@ -498,13 +518,16 @@ async function newsEnter() {
     /* thestival.gr went behind a Cloudflare challenge in July 2026 — the
        third Greek source to break. makthes.gr answers, but publishes no
        category tags and no section feeds, so this half is one row. */
-    try { bItems = (await fetchRSS("https://www.makthes.gr/feed")).items.map(i => i.title); }
-    catch (_) { bItems = [copy("state.offline")]; }
+    try {
+      bItems = (await fetchRSS("https://www.makthes.gr/feed")).items.map(i => i.title);
+      got++;
+    } catch (_) { bItems = [copy("state.offline")]; }
   }
   bottom.insertAdjacentHTML("beforeend", marqueeRow(copy("news.bottom-region"), bItems));
 
   startMarquees(document.getElementById("newsview"));
-  newsLoaded = true;
+  // One working feed is a screen worth keeping; none is a screen to retry.
+  newsAt = got ? Date.now() : 0;
 }
 
 /* =========================================================
@@ -519,6 +542,12 @@ const FIXTURE_CHANNELS = [
   { no: 105, name: "SITEL" }, { no: 201, name: "ERT 1" },
 ];
 
+/* `mode` is the difference between the two jobs this screen does. It is the
+   video-passthrough surface for *everything* mpv plays — a channel, and also
+   a film that MOVIES just resolved — but only live TV owns the dial. Without
+   the distinction, arriving here after a successful /play ran tvEnter() ->
+   tvShow() -> tvLoad() and tuned a channel over the film 450 ms later, which
+   is the whole reason a film never played to the end. */
 const tv = {
   channels: [],
   idx: 0,
@@ -527,6 +556,8 @@ const tv = {
   barTimer: null,
   loadTimer: null,
   state: null,        // null | "loading" | "no-signal"
+  mode: "live",       // "live" | "ondemand"
+  title: "",          // what is playing, when mode is "ondemand"
 };
 
 async function loadChannels() {
@@ -540,13 +571,40 @@ async function loadChannels() {
 function tvEnter() {
   // The list is summoned, never arrived-at: entering TV shows the picture.
   chanListShow(false);
+  /* A film is already playing, so nothing here may touch the player — above
+     all not tvShow()'s debounced tvLoad(). The dial still has to be reachable
+     though: Ⓐ opens the list over the film the same as it does over a
+     channel, and an empty list cannot open, so fetch it and tune nothing. */
+  if (tv.mode === "ondemand") {
+    if (!tv.channels.length) loadChannels().then(() => { if (chanList.open) renderChanList(); });
+    tvNowPlaying();
+    return;
+  }
   if (!tv.channels.length) { loadChannels().then(() => tvShow()); return; }
   tvShow();
+}
+
+/* The same bar the dial uses, saying what is on instead of which number it
+   is. The title goes in the body font, never the dot face: it comes from a
+   catalogue and can be any script (constraint 5). */
+function tvNowPlaying() {
+  const bar = document.getElementById("chanbar");
+  document.getElementById("channum").innerHTML =
+    heading(copy("tv.now-playing"), THEME.layout["bar-number-dot"] || 5.5, { assemble: true });
+  document.getElementById("channame").textContent = tv.title;
+  bar.classList.add("show");
+  clearTimeout(tv.barTimer);
+  tv.barTimer = setTimeout(() => bar.classList.remove("show"), THEME.motion["bar-hold"]);
+  setChanState(null);
 }
 
 function tvShow() {
   const ch = tv.channels[tv.idx];
   if (!ch) { setChanState("empty"); return; }
+  // Reaching here at all means the dial was used — zapped, typed or picked —
+  // so whatever was playing on demand is being replaced by a channel.
+  tv.mode = "live";
+  tv.title = "";
   const bar = document.getElementById("chanbar");
   document.getElementById("channum").innerHTML =
     dotSVG(String(ch.no), THEME.layout["bar-number-dot"] || 5.5, { assemble: true });
@@ -584,6 +642,48 @@ async function tvLoad(ch) {
   } catch (_) { setChanState("no-signal"); showToast(copy("state.offline")); }
 }
 
+/* What the picture is actually doing, once every second while the TV screen
+   is up and never otherwise.
+
+   Everything for this existed and nothing used it: `/player/state` is fully
+   implemented and had no caller, `shim.lua` published {failed, attempts, url}
+   that nothing read, and `copy("state.buffering")` was unreachable. The cost
+   of that was measured on 20 August 2026 — a film resolved to a torrent with
+   a dead swarm, `/play` reported success, the box switched to the TV screen
+   and sat on black indefinitely with nothing on screen to say why. A stalled
+   stream and a working one looked identical.
+
+   Deliberately does not touch the state while the debounced tvLoad() is
+   still pending: "LOADING" is what the keypress already said, and mpv is
+   still on the previous channel until then. */
+let tvPollTimer = null;
+async function tvPoll() {
+  if (view !== "tv" || FIXTURES) return;
+  try {
+    const s = await fetch(`${BACKEND}/player/state`, { signal: AbortSignal.timeout(2000) })
+      .then(r => r.json());
+    if (view !== "tv" || tv.state === "loading") return;
+    if (!s.available || s.idle) { setChanState("no-signal"); return; }
+    // The shim knows a failure the player itself cannot report: a live URL
+    // that opened and then died is retried behind our back.
+    if (s.shim && s.shim.failed) { setChanState("no-signal"); return; }
+    if (s.buffering || (s.position === 0 && s.duration === 0)) {
+      setChanState("buffering");
+      return;
+    }
+    setChanState(null);
+  } catch (_) { /* the offline toast covers a backend that went away */ }
+}
+
+function tvPollStart() {
+  clearInterval(tvPollTimer);
+  tvPollTimer = setInterval(tvPoll, 1000);
+}
+function tvPollStop() {
+  clearInterval(tvPollTimer);
+  tvPollTimer = null;
+}
+
 function tvZap(dir) {
   if (!tv.channels.length) return;
   tv.idx = (tv.idx + dir + tv.channels.length) % tv.channels.length;
@@ -613,6 +713,8 @@ async function tvStop() {
   clearTimeout(tv.loadTimer);
   setChanState(null);
   chanListShow(false);
+  tv.mode = "live";
+  tv.title = "";
   if (!FIXTURES) { try { await fetch(`${BACKEND}/player/stop`, { method: "POST" }); } catch (_) {} }
 }
 
@@ -657,7 +759,7 @@ function renderChanList() {
       // Channel names come from a hand-edited m3u and are not all Latin, so
       // only the number goes to the dot face.
       return `<div class="chanrow${idx === chanList.sel ? " sel" : ""}` +
-             `${idx === tv.idx ? " live" : ""}" data-i="${idx}">
+             `${idx === tv.idx && tv.mode === "live" ? " live" : ""}" data-i="${idx}">
         <span class="cno" style="width:${noW}px">${dotSVG(String(c.no), dot)}</span>
         <span class="cname">${escapeHTML(c.name)}</span>
         <span class="clive"></span>
@@ -799,8 +901,20 @@ function fixtureItems(kind) {
   return (kind === "movie" ? FIXTURE_LIBRARY : FIXTURE_SHOWS).slice();
 }
 
+/* MOVIES and SHOWS are one view switched by `kind`, so this holds the state
+   of whichever is on screen — and `shown` records which that is. Everything
+   in BROWSE is per-catalogue and gets parked in `gridParked` on the way out;
+   `kind`, `detail` and `busy` belong to the view itself and do not.
+
+   Keeping one live object rather than indexing every read by kind is what
+   lets the fifty-odd call sites below stay as they are. The bug it replaces:
+   `loaded` was per-kind while `items` was shared, so MOVIES -> SHOWS ->
+   MOVIES skipped the reset and drew the shows list under the MOVIES title. */
+const BROWSE = ["items", "page", "sel", "topRow", "exhausted"];
+
 const gridState = {
   kind: "movie",
+  shown: null,         // which kind the BROWSE fields currently describe
   items: [],           // everything loaded so far, across pages
   page: 0,
   sel: 0,              // index into `items`, not into the page
@@ -808,8 +922,23 @@ const gridState = {
   detail: false,
   busy: false,
   exhausted: false,
-  loaded: {},
 };
+
+const gridParked = {};   // kind -> the BROWSE fields, as last seen
+
+/* Park what is on screen and bring back the other catalogue, so switching
+   between MOVIES and SHOWS keeps each one's cursor, page and loaded items
+   instead of showing one under the other's title. */
+function gridSwap(kind) {
+  if (gridState.shown === kind) return true;
+  if (gridState.shown) {
+    gridParked[gridState.shown] = Object.fromEntries(BROWSE.map(k => [k, gridState[k]]));
+  }
+  const back = gridParked[kind];
+  Object.assign(gridState, back || { items: [], page: 0, sel: 0, topRow: 0, exhausted: false });
+  gridState.shown = kind;
+  return Boolean(back);
+}
 
 function perPage() {
   return (THEME.layout["grid-columns"] || 6) * (THEME.layout["grid-rows-per-page"] || 5);
@@ -821,12 +950,17 @@ function perPage() {
 async function ensureLoaded(upto) {
   if (FIXTURES || gridState.exhausted || gridState.busy) return;
   if (gridState.items.length >= upto) return;
+  /* Bound to the catalogue it started on: gridSwap can point gridState at the
+     other one mid-fetch, and a page of films appended to the series list is
+     the same class of bug as drawing one under the other's title. */
+  const kind = gridState.kind;
   gridState.busy = true;
   try {
     while (gridState.items.length < upto && !gridState.exhausted) {
       const skip = gridState.items.length;
-      const batch = await fetch(`${BACKEND}/catalog/${gridState.kind}?skip=${skip}`,
+      const batch = await fetch(`${BACKEND}/catalog/${kind}?skip=${skip}`,
         { signal: AbortSignal.timeout(10000) }).then(r => r.json());
+      if (gridState.shown !== kind) return;
       if (!Array.isArray(batch) || !batch.length) { gridState.exhausted = true; break; }
       const seen = new Set(gridState.items.map(i => i.id));
       const fresh = batch.filter(i => !seen.has(i.id));
@@ -834,6 +968,7 @@ async function ensureLoaded(upto) {
       gridState.items.push(...fresh);
     }
   } catch (_) {
+    if (gridState.shown !== kind) return;
     showToast(copy("state.offline"));
     gridState.exhausted = true;
   } finally {
@@ -845,12 +980,12 @@ async function gridEnter() {
   document.getElementById("gridtitle").innerHTML =
     dotSVG(copy(gridState.kind === "movie" ? "tiles.movies" : "tiles.shows"), 6, { assemble: true });
 
-  if (!gridState.loaded[gridState.kind]) {
+  if (!gridSwap(gridState.kind)) {
+    // First time in this catalogue: gridSwap left the fields blank, so fill
+    // them. Coming back to one, it restored them and there is nothing to do.
     gridState.items = FIXTURES ? fixtureItems(gridState.kind) : [];
-    gridState.page = 0; gridState.sel = 0; gridState.topRow = 0;
     gridState.exhausted = FIXTURES;
     await ensureLoaded(perPage());
-    gridState.loaded[gridState.kind] = true;
   }
   renderGrid();
 }
@@ -1281,9 +1416,14 @@ async function playSelected(index = 0) {
     }).then(r => r.json());
     if (r.ok) {
       sources.playing = index;
+      sources.forId = t.id;
       sourcesShow(false);
       closeDetail();
       showToast(`${copy("state.playing")}`, 1500);
+      /* TV is the passthrough surface, not the live dial — say so before
+         going there, or tvEnter() tunes a channel over this in 450 ms. */
+      tv.mode = "ondemand";
+      tv.title = t.what;
       showView("tv");
       return;
     }
@@ -1308,7 +1448,11 @@ async function playSelected(index = 0) {
    per row and /play takes that index back, so resolving — and TorrServer —
    stay entirely on the backend's side of the wire.
    ========================================================= */
-const sources = { open: false, list: [], sel: 0, top: 0, playing: -1, loading: false };
+/* `playing` is a row index into `list`, and `list` is rebuilt per title — so
+   the index only means anything alongside the title it was taken from. That
+   is what `forId` is for: without it the red "this one is on" marker carried
+   over to whatever film was opened next, and red marks state. */
+const sources = { open: false, list: [], sel: 0, top: 0, playing: -1, forId: null, loading: false };
 
 const FIXTURE_STREAMS = [
   { i: 0, label: "Torrentio 1080p Dune.Part.Two.2024.1080p.BluRay.x264", quality: "1080p",
@@ -1331,6 +1475,9 @@ function sourcesShow(on) {
 async function openSources() {
   const t = playTarget();
   if (!t) { showToast(copy("state.empty")); return; }
+
+  // A different title means a different list, so nothing in it is playing.
+  if (sources.forId !== t.id) { sources.playing = -1; sources.forId = t.id; }
 
   sources.sel = Math.max(0, sources.playing);
   sources.top = 0;
@@ -1507,7 +1654,11 @@ function watchApp(id, name) {
         .then(r => r.json());
       if (s.running) { setTimeout(tick, 500); return; }
       const e = s.last_exit || {};
-      if (e.id === id && !e.killed && e.code) {
+      // `e.code` rather than `e.code != null` missed exit 0 — which is the
+      // shape of a launcher script that runs, finds nothing to do and quits
+      // cleanly a tenth of a second later. That is precisely the
+      // tile-that-opens-and-shuts this function exists to report.
+      if (e.id === id && !e.killed && e.code != null) {
         showToast(`${name} · ${copy("state.unavailable")} (${e.code})`, 6000);
       }
     } catch (_) { /* backend went away; the offline toast covers that */ }
@@ -1767,6 +1918,9 @@ function onSources() {
 async function onHome() {
   if (view === "grid") closeDetail();
   if (view === "tv") chanListShow(false);
+  // /home stops the player, so the on-demand title on the bar is now a lie.
+  tv.mode = "live";
+  tv.title = "";
   showView("home");
   if (FIXTURES) return;
   try { await fetch(`${BACKEND}/home`, { method: "POST" }); } catch (_) {}
@@ -1865,12 +2019,31 @@ function drawHints() {
 
 async function loadConfig() {
   if (FIXTURES) return;
-  try { cfg = await fetch(BACKEND + "/config", { signal: AbortSignal.timeout(2500) }).then(r => r.json()); }
-  catch (_) { showToast(copy("state.offline"), 4000); }
+  try {
+    cfg = await withRetry(() => fetch(BACKEND + "/config", { signal: AbortSignal.timeout(2500) })
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); }), 6, 500);
+  } catch (_) { showToast(copy("state.offline"), 4000); }
+}
+
+/* Retry something that only failed because the backend was not up yet.
+   `start-session.sh` waits for :8484 before starting Chromium, but a cold box
+   can still lose that race — and this page is a kiosk with no address bar and
+   no reload button, so one failed fetch at boot is a black screen until
+   somebody SSHes in. Bounded, and the last failure is re-thrown so a
+   genuinely broken theme.json still fails loudly (the point of loadTheme). */
+async function withRetry(what, tries = 10, gap = 400) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { return await what(); } catch (e) { last = e; }
+    // Backs off to a couple of seconds: a backend that is slow to bind is
+    // worth waiting out, and hammering it while it starts helps nobody.
+    await new Promise(r => setTimeout(r, Math.min(gap * (i + 1), 2000)));
+  }
+  throw last;
 }
 
 async function boot() {
-  await loadTheme();
+  await withRetry(() => loadTheme());
   /* Only the active view is in the layout; the rest are display:none so a
      hidden marquee is not animating behind a channel. */
   document.querySelectorAll(".view").forEach(v => {
@@ -1888,6 +2061,14 @@ async function boot() {
   setInterval(tickProgress, 250);
   setInterval(pollPads, 50);          // 20Hz — rAF pins a core to read a d-pad
   setInterval(loadBriefWeather, 15 * 60 * 1000);
+  /* A screen left up refreshes itself. Only the one that is up: re-rendering
+     NEWS in the background restarts its marquees, and nothing behind a view
+     is visible anyway. Both entries are no-ops until their stamp goes
+     stale, so this costs a comparison a minute. */
+  setInterval(() => {
+    if (view === "news") newsEnter();
+    else if (view === "weather") weatherEnter();
+  }, 60 * 1000);
   addEventListener("resize", () => { drawClock(true); buildMenu(); });
 
   if (FIXTURES) showToast("FIXTURES · DEVELOPER MODE", 3000);
@@ -1903,6 +2084,16 @@ async function boot() {
     const i = TILES.findIndex(t => t.view === want && (!q.get("kind") || t.kind === q.get("kind")));
     if (i >= 0) sel = i;
     refreshSel();
+
+    /* &playing=TITLE is the state a successful /play leaves behind: the TV
+       screen as a passthrough surface with the dial standing down. Set before
+       showView, exactly as playSelected does — entering TV in "live" mode
+       fetches channels and tunes one, and doing that first would race. */
+    if (want === "tv" && q.get("playing")) {
+      tv.mode = "ondemand";
+      tv.title = q.get("playing");
+    }
+
     showView(want);
 
     // &list=1 pulls the channel list up on the TV screen. Same rule as the
@@ -1912,7 +2103,41 @@ async function boot() {
     // &sel=N puts the grid cursor on an item and &detail=1 opens its panel,
     // so a scrolled grid and the detail screen are both reachable without a
     // gamepad. Navigation only — neither invents data.
-    if (want === "grid") {
+    /* &revisit=N leaves the screen and comes back, N times — what a person
+       does when something did not load. It is the only way to reach the
+       "try again on the way in" behaviour that NEWS and WEATHER rely on, and
+       like every flag here it is navigation and invents no data. */
+    const revisit = parseInt(q.get("revisit") || "0", 10);
+    if (revisit > 0) {
+      setTimeout(async () => {
+        for (let i = 0; i < revisit; i++) {
+          showView("home");
+          await new Promise(r => setTimeout(r, 150));
+          showView(want);
+          await new Promise(r => setTimeout(r, 400));
+        }
+      }, 500);
+    }
+
+    /* &then=KIND,KIND walks out of BROWSE and back in on another catalogue,
+       as many times as asked. It takes a list because the sequence that used
+       to draw one list under the other's title needed three steps, not two:
+       the second visit to a catalogue is the one that skipped its reset.
+       Each hop is what openSelected does — set the kind, enter the view — so
+       it exercises the real path rather than a test-only one. */
+    if (want === "grid" && q.get("then")) {
+      setTimeout(async () => {
+        await gridEnter();
+        for (const k of q.get("then").split(",")) {
+          showView("home");
+          gridState.kind = k;
+          showView("grid");
+          await gridEnter();
+        }
+      }, 300);
+    }
+
+    if (want === "grid" && !q.get("then")) {
       setTimeout(async () => {
         if (q.get("sel")) {
           const n = parseInt(q.get("sel"), 10);
@@ -1929,7 +2154,17 @@ async function boot() {
     }
   }
 }
-boot();
+/* A kiosk has no address bar, no reload button and usually no keyboard, so
+   "boot threw" cannot be allowed to mean "black screen until somebody SSHes
+   in". After the retries above have genuinely run out, the page reloads
+   itself — which is the one recovery action available to it, and it costs
+   nothing if the backend is still down because the next boot retries again.
+   The reason goes to the console, which start-session.sh pipes to the
+   journal in debug mode (constraint 17 in spirit). */
+boot().catch((e) => {
+  console.error("boot failed, reloading in 5s:", e);
+  setTimeout(() => location.reload(), 5000);
+});
 
 /* Exposed for the headless render test (test/render.mjs) — it drives the
    real module rather than a copy, so the test cannot drift from the UI. */

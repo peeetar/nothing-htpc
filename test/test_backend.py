@@ -243,6 +243,109 @@ class TestStreamRows(unittest.TestCase):
             return stremio.stream_rows("movie", "tt1")
 
 
+class TestAppsFallback(unittest.TestCase):
+    """A config.local.json that never mentions `apps` should not hide tiles.
+
+    config.local.json wins key by key, which is the point of it — but a local
+    file that simply does not mention `apps` was never asking to lose GAMING,
+    and a tile that quietly vanishes is not something the box can explain on a
+    TV. An explicitly empty list still hides them: that is a decision, an
+    absent key is an omission.
+    """
+
+    def _load(self, payload):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(payload, f)
+            path = f.name
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, %r); import server, json;"
+             "print(json.dumps(server.load_config()))" % str(HTPC_DIR / "server")],
+            env=dict(os.environ, HTPC_CONFIG=path),
+            capture_output=True, text=True, timeout=30)
+        os.unlink(path)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout.strip().splitlines()[-1])
+
+    def test_a_missing_apps_key_inherits_the_defaults(self):
+        cfg = self._load({"weather": {"lat": 1.0, "lon": 2.0}})
+        self.assertTrue(cfg.get("apps"), "GAMING should have been inherited")
+        self.assertIn("gaming", [a.get("id") for a in cfg["apps"]])
+
+    def test_an_explicitly_empty_apps_list_is_respected(self):
+        cfg = self._load({"weather": {"lat": 1.0, "lon": 2.0}, "apps": []})
+        self.assertEqual(cfg.get("apps"), [])
+
+    def test_a_local_apps_list_still_wins(self):
+        cfg = self._load({"apps": [{"id": "x", "label": "X", "command": ["/bin/true"]}]})
+        self.assertEqual([a["id"] for a in cfg["apps"]], ["x"])
+
+
+class TestEpisodeFileSelection(unittest.TestCase):
+    """Which file inside a season pack gets played.
+
+    The bug this pins down, measured against live Torrentio and TorrServer on
+    20 August 2026: Torrentio's `fileIdx` counts the torrent's whole file
+    list, TorrServer's `id` counts its own listing, and stremio.py assumed the
+    two differed by one. Asking for Sherlock S01E01 sent fileIdx 8 as index 9,
+    and TorrServer's ninth file is S03E03 — so the box played the wrong
+    episode with every layer reporting success. Matching on the name is the
+    only thing here that is actually true.
+    """
+
+    # TorrServer's own listing, ids as it hands them out (1-based).
+    SHERLOCK = [
+        {"id": 1,  "path": "S01/Sherlock.S01E01.A.Study.in.Pink.1080p.mkv"},
+        {"id": 2,  "path": "S01/Sherlock.S01E02.The.Blind.Banker.1080p.mkv"},
+        {"id": 3,  "path": "S01/Sherlock.S01E03.The.Great.Game.1080p.mkv"},
+        {"id": 9,  "path": "S03/Sherlock.S03E03.His.Last.Vow.1080p.mkv"},
+    ]
+
+    def test_it_matches_the_filename_torrentio_gave(self):
+        got = stremio._pick_file(
+            self.SHERLOCK, "Sherlock.S01E01.A.Study.in.Pink.1080p.mkv", "tt1475582:1:1")
+        self.assertEqual(got, 1)
+
+    def test_it_is_never_fileidx_plus_one(self):
+        # fileIdx was 8 for this episode; 8 + 1 is His Last Vow.
+        got = stremio._pick_file(
+            self.SHERLOCK, "Sherlock.S01E01.A.Study.in.Pink.1080p.mkv", "tt1475582:1:1")
+        self.assertNotEqual(got, 9)
+
+    def test_a_path_matches_on_its_basename(self):
+        got = stremio._pick_file(
+            self.SHERLOCK, "Some.Pack/S01/Sherlock.S01E02.The.Blind.Banker.1080p.mkv", None)
+        self.assertEqual(got, 2)
+
+    def test_it_falls_back_to_the_season_and_episode(self):
+        # A pack that renamed the file still says which episode it is.
+        got = stremio._pick_file(self.SHERLOCK, "not-in-this-torrent.mkv", "tt1475582:1:3")
+        self.assertEqual(got, 3)
+
+    def test_no_match_chooses_nothing_rather_than_wrongly(self):
+        # TorrServer then serves the largest file, which is right for the
+        # single-file torrent most films are. A confident wrong answer is the
+        # one outcome that must not happen.
+        self.assertIsNone(stremio._pick_file(self.SHERLOCK, "unrelated.mkv", "tt999:9:9"))
+        self.assertIsNone(stremio._pick_file([], "anything.mkv", "tt1:1:1"))
+
+    def test_episode_numbers_do_not_match_across_seasons(self):
+        self.assertIsNone(stremio._pick_file(
+            [{"id": 1, "path": "Show.S11E01.mkv"}], None, "tt1:1:1"))
+
+    def test_wanted_file_prefers_behaviour_hints(self):
+        s = {"behaviorHints": {"filename": "Right.S01E01.mkv"},
+             "title": "Pack name\nSome/Other.S01E01.mkv\n124 seeds"}
+        self.assertEqual(stremio._wanted_file(s), "Right.S01E01.mkv")
+
+    def test_wanted_file_falls_back_to_the_title_path(self):
+        s = {"title": "Pack name\nSeason 1/Show.S01E01.The.Title.mkv\n124 seeds"}
+        self.assertEqual(stremio._wanted_file(s), "Season 1/Show.S01E01.The.Title.mkv")
+
+    def test_wanted_file_is_none_when_nothing_names_a_file(self):
+        self.assertIsNone(stremio._wanted_file({"title": "Just a pack name"}))
+
+
 class TestResolveByIndex(unittest.TestCase):
     STREAMS = [
         {"name": "a", "title": "first 1080p", "url": "https://d/first.mkv"},
@@ -577,6 +680,19 @@ class TestServerHTTP(unittest.TestCase):
                 return r.status, json.loads(r.read())
         except urllib.error.HTTPError as e:
             return e.code, json.loads(e.read())
+
+    def test_config_tells_the_page_only_what_it_reads(self):
+        """It used to send the whole config file, TMDB key included — a key
+        the page never reads, because every TMDB call is made server-side in
+        tmdb.py. The bind is loopback-only, so nothing off-box could ask; a
+        secret that is never sent cannot leak from a place nobody looks."""
+        status, cfg = self.get("/config")
+        self.assertEqual(status, 200)
+        self.assertNotIn("tmdb_key", cfg)
+        self.assertLessEqual(set(cfg), {"weather", "ui"})
+        # ...and still carries the two things it is for.
+        self.assertIn("transparent", cfg.get("ui", {}))
+        self.assertIn("lat", cfg.get("weather", {}))
 
     def test_serves_the_ui(self):
         status, body, ctype = self.raw("/")

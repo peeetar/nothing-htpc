@@ -216,7 +216,8 @@
     "tv": {
       "_note": "The channel list — the dial made visible. TV is the one screen where numbers still mean something, so this is the only place they are ever browsed.",
       "channels": "CHANNELS",
-      "live": "LIVE"
+      "live": "LIVE",
+      "now-playing": "NOW PLAYING"
     }
   },
 

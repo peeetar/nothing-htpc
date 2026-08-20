@@ -265,7 +265,7 @@ Three rules existed only because of the Pi, and all three flipped:
 
 ## Status
 
-Green on the laptop: 54 backend tests, 97 UI render tests, syntax and theme
+Green on the laptop: 67 backend tests, 113 UI render tests, syntax and theme
 coverage. The `/streams` endpoint was exercised against live Torrentio (91
 streams for one title, correctly ranked) and the GAMING tile against a machine
 with no gamescope, which reported the missing binary on the TV and in the
@@ -304,17 +304,48 @@ Done:
 - `server/channels.py` — parses the real 25-channel `channels.m3u`
 - `cabletv/shim.lua` — 2,105 lines down to one file that draws nothing
 - `system/start-session.sh` — mpv first (idle, IPC), Chromium second, on top
-- `test/` — 36 backend tests, 33 UI render tests, syntax and theme-coverage
+- `test/` — 36 backend tests, 33 UI render tests (as of 30 July; 67 and 113
+  today), syntax and theme-coverage
   checks. `test/run-all.sh` is the whole thing
 
-Not done:
+Not done (as written on 30 July 2026; struck items were closed later — see
+[the August retarget](#the-august-2026-retarget) and the note below):
 
 - **The layering spike.** Chromium's transparency over mpv under cage is
   wired up and unproven; it is risk 1 and it needs the actual box
-- TorrServer is not installed or tested anywhere
-- SHOWS uses the movie catalogue path end to end but series stream selection
-  (which episode file) is untested
+- ~~TorrServer is not installed or tested anywhere~~ — the session starts it
+  (13 August), `install.sh` installs it and both preflights check for it
+  (20 August), and the whole chain has been run end to end on the laptop
+- ~~SHOWS uses the movie catalogue path end to end but series stream selection
+  (which episode file) is untested~~ — tested 20 August, and it **was broken**:
+  see below
 - No screen has been driven with a real gamepad or a real TV remote
+
+## What the first end-to-end run found — 20 August 2026
+
+The on-demand path had never actually been run against a real stream. Two
+bugs were waiting in it, and both had the same shape: every layer reported
+success.
+
+1. **A film was tuned over by a channel 450 ms after it started.** A
+   successful `/play` called `showView("tv")` while the dial was still live,
+   so entering the TV screen fetched the channel list and tuned one on top of
+   the film. MOVIES and SHOWS had therefore never played anything to the end.
+   Fixed with `tv.mode` — CLAUDE.md constraint 35.
+2. **The wrong episode played.** Torrentio's `fileIdx` counts the torrent's
+   whole file list and TorrServer's `id` counts its own, and the code assumed
+   they differed by one. Sherlock S01E01 resolved to index 9, which is
+   S03E03 — and it played happily, with the right title on the toast. Fixed
+   by matching on the filename Torrentio names outright — constraint 34.
+
+Also found: the poster grid drew the shows list under the MOVIES title on the
+third catalogue switch, and `/config` was handing the browser the TMDB key.
+Both fixed, all four covered by tests that were checked against the bug.
+
+What the run **did** prove: Cinemeta, Torrentio and its ranking, the row-index
+contract between `/streams` and `/play`, TorrServer's magnet handoff, and mpv
+playing both a live HLS channel and a torrent — 1080p, cache full, position
+advancing in real time.
 
 Done since, on merge: the old code is deleted (`cabletv.lua`, `cabletv.sh`,
 `input.conf`, `gen_static.py`, `fonts/`, `ee3resolve.py`, `torrentstream.sh`,

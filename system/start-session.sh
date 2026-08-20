@@ -145,7 +145,25 @@ elif [ -n "$DEBUG" ]; then
   echo "session | spotifyd not installed — MUSIC will show nothing playing"
 fi
 
-sleep 1
+# Wait for the backend to actually answer before pointing a kiosk at it.
+#
+# This was `sleep 1`, which is a guess, and on a cold boot it is the wrong
+# one: Chromium loads http://127.0.0.1:8484 into a --kiosk window with no
+# address bar, no reload button and usually no keyboard, so losing that race
+# means the box sits on Chromium's connection-error page until someone SSHes
+# in. The page retries its own fetches, but it has to be *the page* first.
+#
+# Bounded, and it starts Chromium either way: if the backend is genuinely
+# broken the launcher's own offline handling is a better thing to be looking
+# at than a browser error, and the journal already has server.py's reason.
+for _ in $(seq 1 60); do
+  curl -sf -m 1 -o /dev/null "http://127.0.0.1:8484/config" 2>/dev/null && break
+  sleep 0.25
+done
+if ! curl -sf -m 1 -o /dev/null "http://127.0.0.1:8484/config" 2>/dev/null; then
+  echo "session | backend did not answer on 127.0.0.1:8484 within 15s —" \
+       "starting the UI anyway; it will retry" >&2
+fi
 
 # Kiosk browser = the launcher UI. When this exits, the session ends.
 #

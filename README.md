@@ -518,15 +518,24 @@ comma-separated list; the default is `torrentio.strem.fun` then
 
 ### TorrServer
 
-Optional — everything except MOVIES and SHOWS works without it. One
-static Go binary, no Node, no `peerflix`:
+One static Go binary, no Node, no `peerflix`. **`install.sh` fetches it**
+(step 6 of 7) to `/usr/local/bin/torrserver` — it used to be a
+hand-install, which meant a fresh box answered every Ⓐ press on a film
+with "torrserver is not running" and left you to work out why.
+
+The step is deliberately non-fatal: it is the only one that needs to
+reach GitHub, and live TV, news, weather, music and gaming do not care
+whether it worked. A failure warns and the install carries on.
+`install.sh --check` reports whether the binary is there and whether
+anything is answering on 8090.
+
+To do it by hand anyway — the session looks in `~/.local/bin` too:
 
 ```bash
 # x86_64 — no root needed
 curl -L -o ~/.local/bin/torrserver \
   https://github.com/YouROK/TorrServer/releases/latest/download/TorrServer-linux-amd64
 chmod +x ~/.local/bin/torrserver
-torrserver --port 8090 --path ~/.local/share/torrserver &
 ```
 
 **The session starts it for you.** `start-session.sh` and
@@ -847,8 +856,8 @@ Everything checkable without a TV, a CEC line or a graphics card:
 test/run-all.sh
 ```
 
-That is syntax for every language in the repo, 54 backend tests
-(`python3 -m unittest discover -s test`), and 97 UI render tests that
+That is syntax for every language in the repo, 67 backend tests
+(`python3 -m unittest discover -s test`), and 113 UI render tests that
 load the real launcher in headless Chromium and assert what each screen
 drew — which is the only way to catch the failure mode that matters here,
 where a JS exception during boot leaves a black screen that looks exactly

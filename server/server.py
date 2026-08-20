@@ -109,6 +109,9 @@ def _config_path():
 
 
 CONFIG_PATH = _config_path()
+# The tracked defaults, whatever CONFIG_PATH ended up being. load_config()
+# falls back to this for `apps` alone — see the note there.
+DEFAULT_CONFIG_PATH = ROOT / "config.json"
 # 8484 everywhere real. HTPC_PORT exists so the test suite can start a second
 # server on a scratch port without colliding with a running session.
 PORT = int(os.environ.get("HTPC_PORT") or 8484)
@@ -263,11 +266,39 @@ UI_TRANSPARENT = os.environ.get("HTPC_UI_TRANSPARENT", "1") not in ("", "0")
 def load_config():
     with open(CONFIG_PATH) as f:
         cfg = json.load(f)
+    # config.local.json wins key by key, which is the point of it — but a
+    # local file that simply does not mention `apps` was never asking to hide
+    # every tile that launches a process, and silently losing GAMING is not
+    # something the box can explain on a TV. An explicitly empty list still
+    # hides them: that is a decision, an absent key is an omission.
+    if "apps" not in cfg and Path(CONFIG_PATH) != DEFAULT_CONFIG_PATH:
+        try:
+            with open(DEFAULT_CONFIG_PATH) as f:
+                base = json.load(f)
+            if base.get("apps"):
+                cfg["apps"] = base["apps"]
+                log("config", "no `apps` in %s — inherited %d from config.json"
+                    % (os.path.basename(CONFIG_PATH), len(base["apps"])))
+        except (OSError, ValueError):
+            pass
     # Runtime facts the page cannot discover, merged over the file. Not stored
     # in config.json: this is a property of the session it is running in, not
     # of the box, and it changes between a kiosk boot and a nested dev run.
     cfg["ui"] = {"transparent": UI_TRANSPARENT}
     return cfg
+
+
+# Only what the page actually reads. The whole config used to go over the
+# wire, which handed the browser the TMDB key — a key the page has no use for
+# (every TMDB call is made here, in tmdb.py) and therefore no business
+# holding. The bind is 127.0.0.1 so nothing off-box could ask, but a secret
+# that is not sent cannot leak from a place nobody thought to look.
+PUBLIC_CONFIG_KEYS = ("weather", "ui")
+
+
+def public_config():
+    cfg = load_config()
+    return {k: cfg[k] for k in PUBLIC_CONFIG_KEYS if k in cfg}
 
 
 def kill_current():
@@ -492,7 +523,14 @@ class Handler(BaseHTTPRequestHandler):
                 log("news", "%s: %s" % (url or "(no url)", e))
                 self._send(200, {"items": [], "error": str(e)})
         elif path == "/config":
-            self._send(200, load_config())
+            # A missing or unparseable config is a JSON error, not a dropped
+            # socket: every other path here reports its failure and this one
+            # used to take the connection down with a traceback instead.
+            try:
+                self._send(200, public_config())
+            except (OSError, ValueError) as e:
+                log("config", "%s: %s" % (CONFIG_PATH, e))
+                self._send(500, {"error": "config is missing or not valid JSON"})
         elif path == "/status":
             with state_lock:
                 running = current["proc"] is not None and current["proc"].poll() is None

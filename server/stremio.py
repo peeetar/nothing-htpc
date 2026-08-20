@@ -453,9 +453,25 @@ def resolve(kind, imdb_id, index=0):
     if not info_hash:
         raise StremioError("stream has neither a URL nor an infoHash")
 
-    idx = best.get("fileIdx")
     magnet = "magnet:?xt=urn:btih:%s" % info_hash
-    return torrserver_stream(magnet, idx), _label(best)
+    return torrserver_stream(magnet, _wanted_file(best), imdb_id), _label(best)
+
+
+def _wanted_file(s):
+    """The file *inside* the torrent that this stream actually means.
+
+    Deliberately not `fileIdx`. See _pick_file for why that number cannot be
+    used. Torrentio states the filename outright in `behaviorHints.filename`,
+    and repeats the path within the torrent as the second line of `title`, so
+    there is no need to count anything.
+    """
+    bh = s.get("behaviorHints") or {}
+    if bh.get("filename"):
+        return bh["filename"]
+    for line in [l.strip() for l in (s.get("title") or "").split("\n")]:
+        if re.search(r"\.(mkv|mp4|avi|m4v|ts|webm)$", line, re.I):
+            return line
+    return None
 
 
 def _label(s):
@@ -465,7 +481,43 @@ def _label(s):
 
 # --- TorrServer --------------------------------------------------------------
 
-def torrserver_stream(magnet, file_idx=None):
+def _basename(path):
+    return str(path or "").replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def _pick_file(files, want_file, want_id=None):
+    """Which file in the torrent TorrServer should serve.
+
+    **Never `fileIdx + 1`.** Torrentio's `fileIdx` counts the torrent's whole
+    file list; TorrServer's `id` counts its own listing of the same torrent,
+    and on a season pack the two drift apart. Measured 20 August 2026: asking
+    for Sherlock S01E01 sent `fileIdx` 8 as index 9, and TorrServer's ninth
+    file is S03E03 — so the box played the wrong episode, confidently, with
+    every layer reporting success. That is the worst shape a bug can take
+    here, which is why this matches on the name instead of arithmetic.
+
+    Returning None is the honest answer when nothing matches: TorrServer then
+    picks the largest file, which is right for the single-file torrent that
+    most films are and is at least not a confident wrong answer for a pack.
+    """
+    if not files:
+        return None
+    if want_file:
+        base = _basename(want_file).lower()
+        for f in files:
+            if _basename(f.get("path")).lower() == base:
+                return f.get("id")
+    # A pack with a renamed file still names the episode in its path.
+    m = re.search(r":(\d+):(\d+)$", str(want_id or ""))
+    if m:
+        pat = r"s0*%se0*%s\b" % (m.group(1), m.group(2))
+        for f in files:
+            if re.search(pat, str(f.get("path") or ""), re.I):
+                return f.get("id")
+    return None
+
+
+def torrserver_stream(magnet, want_file=None, want_id=None):
     """Add a magnet to TorrServer and return the HTTP URL of its video.
 
     TorrServer is a single static Go binary. peerflix and webtorrent were
@@ -490,11 +542,35 @@ def torrserver_stream(magnet, file_idx=None):
     if not h:
         raise StremioError("torrserver did not return a hash")
 
+    # The add response already lists the files, but a magnet TorrServer has
+    # not seen before answers before it has the metadata — so give it a few
+    # seconds to produce one rather than falling straight through to "let
+    # TorrServer choose", which on a season pack is a coin toss.
+    files = info.get("file_stats") or []
+    for _ in range(10):
+        if files:
+            break
+        time.sleep(1)
+        files = _torrent_files(h)
+
     q = {"link": h, "play": ""}
-    if file_idx is not None:
-        # Torrentio's fileIdx is 0-based; TorrServer's index is 1-based.
-        q["index"] = int(file_idx) + 1
+    idx = _pick_file(files, want_file, want_id)
+    if idx is not None:
+        q["index"] = idx
     return "%s/stream?%s" % (TORRSERVER, urllib.parse.urlencode(q))
+
+
+def _torrent_files(info_hash):
+    """TorrServer's own listing for a torrent it already knows about."""
+    body = json.dumps({"action": "get", "hash": info_hash}).encode()
+    req = urllib.request.Request(
+        TORRSERVER + "/torrents", data=body,
+        headers={"content-type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+            return json.loads(r.read(1_000_000).decode("utf-8", "replace")).get("file_stats") or []
+    except (urllib.error.URLError, ValueError):
+        return []
 
 
 def torrserver_available():
