@@ -8,6 +8,14 @@
   /* Every value here comes from theme.json via theme.js. A literal colour,
      duration or spacing in this stylesheet is a bug: it is a value that a
      reskin cannot reach. The only literals are structural (0, 50%, 100%). */
+  :root {
+    /* The opaque stop of a mask gradient. In a mask only the alpha channel is
+       read, so this is the number 1 wearing a colour's clothes — not a design
+       decision, and deliberately NOT in theme.json: a reskin that changed it
+       would break every fade rather than restyle it. Named once here so the
+       fourteen `var(--mask-opaque)`s it replaces stop reading as hardcoded black. */
+    --mask-opaque: #000;
+  }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
   body {
@@ -525,18 +533,18 @@
      scrolled to the bottom fades at the top instead of pretending the last
      line continues. */
   .review .rbody.more {
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-review)), transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 calc(100% - var(--fade-review)), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, var(--mask-opaque) calc(100% - var(--fade-review)), transparent 100%);
+    mask-image: linear-gradient(to bottom, var(--mask-opaque) calc(100% - var(--fade-review)), transparent 100%);
   }
   .review .rbody.more.scrolled {
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review),
-      #000 calc(100% - var(--fade-review)), transparent 100%);
-    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review),
-      #000 calc(100% - var(--fade-review)), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, var(--mask-opaque) var(--fade-review),
+      var(--mask-opaque) calc(100% - var(--fade-review)), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, var(--mask-opaque) var(--fade-review),
+      var(--mask-opaque) calc(100% - var(--fade-review)), transparent 100%);
   }
   .review .rbody.end.more.scrolled {
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review), #000 100%);
-    mask-image: linear-gradient(to bottom, transparent 0, #000 var(--fade-review), #000 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, var(--mask-opaque) var(--fade-review), var(--mask-opaque) 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, var(--mask-opaque) var(--fade-review), var(--mask-opaque) 100%);
   }
 
   /* ---------- SHOWS: seasons and episodes ----------
@@ -646,9 +654,9 @@
     flex: 1; min-width: 0; overflow: hidden;
     margin-left: 1.4em;
     -webkit-mask-image: linear-gradient(to right, transparent 0,
-      #000 var(--fade-edge), #000 calc(100% - var(--fade-edge)), transparent 100%);
+      var(--mask-opaque) var(--fade-edge), var(--mask-opaque) calc(100% - var(--fade-edge)), transparent 100%);
     mask-image: linear-gradient(to right, transparent 0,
-      #000 var(--fade-edge), #000 calc(100% - var(--fade-edge)), transparent 100%);
+      var(--mask-opaque) var(--fade-edge), var(--mask-opaque) calc(100% - var(--fade-edge)), transparent 100%);
   }
   .catrow .track {
     display: inline-flex; gap: 3.5em;

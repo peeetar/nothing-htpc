@@ -66,10 +66,16 @@ detect_pm() {
 }
 PM="$(detect_pm)"
 
+# libva-utils is `vainfo`, which is the only way to answer "is this box
+# actually decoding in hardware" rather than guessing from the fact that it
+# plays. mesa-va-drivers is the VA-API driver amdgpu needs — see the freeworld
+# note in step 1.
 PKGS_APT=(cage chromium mpv foot htop python3 python3-evdev v4l-utils playerctl
-          pipewire pipewire-audio wireplumber fonts-dejavu-core git curl)
+          pipewire pipewire-audio wireplumber fonts-dejavu-core git curl
+          libva-utils mesa-va-drivers)
 PKGS_DNF=(cage chromium mpv foot htop python3 python3-evdev v4l-utils playerctl
-          pipewire pipewire-pulseaudio wireplumber dejavu-sans-fonts git curl)
+          pipewire pipewire-pulseaudio wireplumber dejavu-sans-fonts git curl
+          libva-utils mesa-va-drivers)
 
 case "$PM" in
   dnf) PKGS=("${PKGS_DNF[@]}") ;;
@@ -90,8 +96,33 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$1"; FAILED=1; }
 warn() { printf '  \033[33m!\033[0m %s\n' "$1"; }
 step() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
+# Every step's commands go through here, and a failure is recorded rather
+# than shrugged off. There is no `set -e` on purpose — several steps below are
+# allowed to fail (disable getty@tty1 is generator-instantiated on Fedora and
+# returns non-zero doing nothing) and aborting the whole install on those
+# would be worse. But the opposite was true until 20 August 2026: run() never
+# looked at an exit code at all, so a failed `dnf install` still ended with
+# "Done. Reboot to land on the launcher" on a box with no browser — and since
+# Chromium exiting *is* the end of the session, that reads as a box refusing
+# to boot rather than as a package that did not install.
+STEP_FAILED=0
 run() {
-  if [ "$DRY" = 1 ]; then printf '    would run: %s\n' "$*"; else "$@"; fi
+  if [ "$DRY" = 1 ]; then printf '    would run: %s\n' "$*"; return 0; fi
+  # rc captured before anything else can clobber $? — inside `if ! "$@"` it is
+  # already the negation's status and always reads 0.
+  local rc=0
+  "$@" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    bad "failed (exit $rc): $*"
+    STEP_FAILED=1
+    return 1
+  fi
+}
+
+# For the handful of commands whose failure is genuinely not a problem.
+run_ok() {
+  if [ "$DRY" = 1 ]; then printf '    would run: %s\n' "$*"; return 0; fi
+  "$@" || true
 }
 
 # Can the session user actually read the checkout? Since the box runs the repo
@@ -240,6 +271,27 @@ if [ "$CHECK" = 1 ]; then
     warn "torrserver not installed — MOVIES and SHOWS cannot play (re-run this installer)"
   fi
 
+  step "Conflicts"
+  # `set-default graphical.target` + `disable getty@tty1` does NOT disable a
+  # display manager. On a Workstation install GDM and the kiosk both want tty1
+  # and the DRM device, and which one wins is a race. Fedora Server or a
+  # minimal install is the intended target; this is the check that says so.
+  dm_found=""
+  for dm in gdm sddm lightdm lxdm xdm greetd; do
+    systemctl is-enabled "$dm" >/dev/null 2>&1 && dm_found="$dm" && break
+  done
+  if [ -n "$dm_found" ]; then
+    bad "$dm_found is enabled — it will fight htpc-session for tty1 and the GPU"
+    echo "    fix: sudo systemctl disable $dm_found   (this box is a kiosk, not a desktop)"
+  else
+    ok "no display manager enabled"
+  fi
+  if [ "$(systemctl get-default 2>/dev/null)" = "graphical.target" ]; then
+    ok "default target is graphical.target"
+  else
+    warn "default target is $(systemctl get-default 2>/dev/null) — re-run this installer"
+  fi
+
   step "Service identity"
   svc=/etc/systemd/system/htpc-session.service
   if [ -f "$svc" ]; then
@@ -292,6 +344,22 @@ case "$PM" in
     ;;
 esac
 
+# Fedora ships Mesa with the patent-encumbered decoders stripped out, so
+# stock mesa-va-drivers gives amdgpu a VA-API that cannot do H.264 or HEVC —
+# and mpv's `--hwdec=auto-safe` does not complain, it just falls back to
+# software and burns CPU on exactly the 1080p HEVC channels this box is for.
+# The replacement lives in RPM Fusion, which this script will not enable for
+# you: that is a third-party repo and enabling one behind someone's back is
+# not a thing an installer should do.
+if [ "$PM" = dnf ] && ! rpm -q mesa-va-drivers-freeworld >/dev/null 2>&1; then
+  warn "Fedora's mesa-va-drivers has the codecs stripped out. For hardware"
+  warn "H.264/HEVC decode, enable RPM Fusion and swap in the freeworld build:"
+  warn "  sudo dnf install \\"
+  warn "    https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-\$(rpm -E %fedora).noarch.rpm"
+  warn "  sudo dnf swap mesa-va-drivers mesa-va-drivers-freeworld"
+  warn "Check afterwards with: vainfo | grep -E 'H264|HEVC'"
+fi
+
 step "2/7 Boot config"
 cfg=$(boot_config)
 if [ -z "$cfg" ]; then
@@ -318,7 +386,7 @@ step "3/7 Groups and input devices"
 run usermod -aG input,video,render,audio "$HTPC_USER"
 run install -m 0644 "$REPO/system/99-htpc-input.rules" /etc/udev/rules.d/
 run bash -c "echo uinput > /etc/modules-load.d/uinput.conf"
-run modprobe uinput
+run_ok modprobe uinput      # absent on some kernels; only the TV remote wants it
 run udevadm control --reload
 ok "groups + udev rules (group changes apply after reboot)"
 
@@ -357,7 +425,9 @@ else
   ok "installed $unit for $HTPC_USER, running $REPO"
 fi
 run systemctl daemon-reload
-run systemctl disable getty@tty1
+# Generator-instantiated on Fedora: returns non-zero having done nothing, and
+# the unit's own Conflicts=getty@tty1.service covers it regardless.
+run_ok systemctl disable getty@tty1
 run systemctl enable htpc-session
 run systemctl set-default graphical.target
 
@@ -397,16 +467,42 @@ else
   rm -f "$ts_tmp"
 fi
 
-step "7/7 SD card wear"
+step "7/7 Flash wear"
 # Chromium's cache and the systemd journal are the two things that write
 # constantly to a card that does not enjoy it.
-run mkdir -p /etc/systemd/journald.conf.d
-run bash -c "printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=16M\n' > /etc/systemd/journald.conf.d/htpc.conf"
-ok "journal moved to RAM"
+#
+# But this used to fire unconditionally, and on the AMD box that is actively
+# harmful: Storage=volatile throws away the journal at every reboot, and the
+# journal is exactly what you need to read after a kiosk that flickers back to
+# the launcher. So it is now what its heading always claimed — a measure for
+# removable media, applied when the root filesystem is on some.
+# findmnt can hand back a subvolume ("/dev/nvme0n1p3[/root]"), and turning a
+# partition into its parent disk by chopping digits gets nvme and mmcblk
+# wrong. lsblk knows the answer outright.
+root_src="$(findmnt -no SOURCE / 2>/dev/null | sed 's|\[.*||')"
+root_dev="$(lsblk -no PKNAME "$root_src" 2>/dev/null | head -1)"
+[ -n "$root_dev" ] || root_dev="$(lsblk -no KNAME "$root_src" 2>/dev/null | head -1)"
+if [ -n "$root_dev" ] && [ "$(cat "/sys/block/$root_dev/removable" 2>/dev/null)" = 1 ]; then
+  run mkdir -p /etc/systemd/journald.conf.d
+  run bash -c "printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=16M\n' > /etc/systemd/journald.conf.d/htpc.conf"
+  ok "root is on removable media ($root_dev) — journal moved to RAM"
+elif [ -f /etc/systemd/journald.conf.d/htpc.conf ]; then
+  warn "root is not removable but the journal is still volatile —"
+  warn "  rm /etc/systemd/journald.conf.d/htpc.conf to keep logs across reboots"
+else
+  ok "root is on fixed storage ($root_dev) — journal left on disk, where a"
+  ok "  post-mortem of a crash-looping session can still be read"
+fi
 
 echo
 if [ "$DRY" = 1 ]; then
   echo "Dry run complete — nothing changed."
+elif [ "$STEP_FAILED" = 1 ]; then
+  echo "FINISHED WITH ERRORS — see the ✗ lines above."
+  echo "The box is very likely not bootable into the launcher yet. Fix those,"
+  echo "then re-run this installer (it is idempotent) and audit with:"
+  echo "                                       $REPO/system/install.sh --check"
+  exit 1
 else
   echo "Done. Reboot to land on the launcher:  sudo reboot"
   echo "Afterwards, audit it with:             $REPO/system/install.sh --check"

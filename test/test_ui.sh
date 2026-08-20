@@ -289,8 +289,11 @@ finally: s.close()
 " 2>/dev/null; then
   STUBFILE="$(mktemp)"
   cat > "$STUBFILE" <<'NEWSSTUB'
-# argv[2] = 'always' (every /news request fails) or 'first3' (the first
-# visit's three requests fail, then it answers).
+# argv[2] = 'always' (every /news request fails) or 'firstvisit' (every
+# request of the first visit fails, then it answers). A visit is
+# news-rows-top rows plus the Greek one — 5 at the base profile — and the
+# threshold has to clear all of them, or the screen recovers partway through
+# the first visit and the retry-on-re-entry path is never exercised.
 import http.server, os, json, sys
 MODE = sys.argv[2]
 N = [0]
@@ -298,7 +301,7 @@ class H(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith('/news'):
             N[0] += 1
-            if MODE == 'always' or N[0] <= 3:
+            if MODE == 'always' or N[0] <= 5:
                 self.send_error(502, 'upstream down'); return
             b = json.dumps({'items': [{'title': 'RECOVERED HEADLINE'}]}).encode()
             self.send_response(200); self.send_header('content-type', 'application/json')
@@ -337,7 +340,7 @@ NEWSSTUB
   # A feed that fails the first visit and then answers. Counted rather than
   # timed: --virtual-time-budget fast-forwards the page's timers and leaves a
   # wall clock behind, so "for the first N seconds" means nothing here.
-  python3 "$STUBFILE" "$HTPC_DIR/launcher" first3 >/dev/null 2>&1 &
+  python3 "$STUBFILE" "$HTPC_DIR/launcher" firstvisit >/dev/null 2>&1 &
   STUB=$!
   sleep 1
   # &revisit=N leaves the screen and comes back — what a person does when
